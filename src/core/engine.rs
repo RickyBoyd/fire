@@ -1442,6 +1442,13 @@ mod tests {
         );
     }
 
+    fn assert_approx_tol(actual: f64, expected: f64, tol: f64) {
+        assert!(
+            (actual - expected).abs() <= tol,
+            "expected {expected}, got {actual}, tolerance {tol}"
+        );
+    }
+
     fn sample_inputs() -> Inputs {
         Inputs {
             current_age: 30,
@@ -1504,6 +1511,54 @@ mod tests {
             cash_growth_rate: 0.01,
             post_access_withdrawal_order: WithdrawalOrder::ProRata,
         }
+    }
+
+    fn deterministic_oracle_inputs() -> Inputs {
+        let mut inputs = sample_inputs();
+        inputs.current_age = 30;
+        inputs.max_retirement_age = 30;
+        inputs.horizon_age = 31;
+        inputs.pension_access_age = 30;
+        inputs.simulations = 1;
+        inputs.seed = 7;
+
+        inputs.isa_annual_contribution = 0.0;
+        inputs.taxable_annual_contribution = 0.0;
+        inputs.pension_annual_contribution = 0.0;
+        inputs.contribution_growth_rate = 0.0;
+
+        inputs.isa_return_mean = 0.0;
+        inputs.taxable_return_mean = 0.0;
+        inputs.pension_return_mean = 0.0;
+        inputs.isa_return_vol = 0.0;
+        inputs.taxable_return_vol = 0.0;
+        inputs.pension_return_vol = 0.0;
+        inputs.inflation_mean = 0.0;
+        inputs.inflation_vol = 0.0;
+        inputs.cash_growth_rate = 0.0;
+        inputs.taxable_return_tax_drag = 0.0;
+
+        inputs.target_annual_income = 0.0;
+        inputs.mortgage_annual_payment = 0.0;
+        inputs.mortgage_end_age = None;
+
+        inputs.capital_gains_tax_rate = 0.0;
+        inputs.capital_gains_allowance = 0.0;
+        inputs.pension_tax_mode = PensionTaxMode::FlatRate;
+        inputs.pension_flat_tax_rate = 0.0;
+        inputs.state_pension_start_age = 200;
+        inputs.state_pension_annual_income = 0.0;
+
+        inputs.withdrawal_strategy = WithdrawalStrategy::Guardrails;
+        inputs.bad_year_threshold = -1.0;
+        inputs.good_year_threshold = 1.0;
+        inputs.bad_year_cut = 0.0;
+        inputs.good_year_raise = 0.0;
+        inputs.min_income_floor = 1.0;
+        inputs.max_income_ceiling = 1.0;
+        inputs.good_year_extra_buffer_withdrawal = 0.0;
+        inputs.post_access_withdrawal_order = WithdrawalOrder::IsaFirst;
+        inputs
     }
 
     fn assert_finite_non_negative(value: f64, label: &str) {
@@ -1698,6 +1753,187 @@ mod tests {
                 + age.median_terminal_cash;
             prop_assert!((median_terminal_sum - age.median_terminal_pot).abs() < 1e-3);
         }
+    }
+
+    #[test]
+    fn oracle_compound_pre_retirement_path_matches_hand_calculation() {
+        let mut inputs = deterministic_oracle_inputs();
+        inputs.current_age = 30;
+        inputs.max_retirement_age = 33;
+        inputs.horizon_age = 34;
+        inputs.pension_access_age = 57;
+
+        inputs.isa_start = 100.0;
+        inputs.taxable_start = 50.0;
+        inputs.taxable_cost_basis_start = 50.0;
+        inputs.pension_start = 200.0;
+        inputs.cash_start = 0.0;
+
+        inputs.isa_annual_contribution = 10.0;
+        inputs.taxable_annual_contribution = 5.0;
+        inputs.pension_annual_contribution = 2.0;
+        inputs.contribution_growth_rate = 0.0;
+
+        inputs.isa_return_mean = 0.10;
+        inputs.taxable_return_mean = 0.10;
+        inputs.pension_return_mean = 0.10;
+        inputs.target_annual_income = 0.0;
+
+        // Hand calculation:
+        // ISA: ((100*1.1+10)*1.1+10)*1.1+10 = 166.2
+        // Taxable: ((50*1.1+5)*1.1+5)*1.1+5 = 83.1
+        // Pension: ((200*1.1+2)*1.1+2)*1.1+2 = 272.82
+        // Retirement total = 522.12; then one retirement year of 10% growth -> 574.332
+        let mut rng = Rng::new(derive_seed(inputs.seed, 33, 0));
+        let scenario = simulate_scenario(&inputs, 33, 33, &mut rng, None);
+
+        assert!(scenario.success);
+        assert_approx(scenario.reported_retirement_isa, 166.2);
+        assert_approx(scenario.reported_retirement_taxable, 83.1);
+        assert_approx(scenario.reported_retirement_pension, 272.82);
+        assert_approx(scenario.reported_retirement_total, 522.12);
+
+        assert_approx(scenario.reported_terminal_isa, 182.82);
+        assert_approx(scenario.reported_terminal_taxable, 91.41);
+        assert_approx(scenario.reported_terminal_pension, 300.102);
+        assert_approx(scenario.reported_terminal_total, 574.332);
+    }
+
+    #[test]
+    fn oracle_isa_cap_overflow_and_contribution_growth_match_hand_calculation() {
+        let mut inputs = deterministic_oracle_inputs();
+        inputs.current_age = 30;
+        inputs.max_retirement_age = 33;
+        inputs.horizon_age = 34;
+        inputs.pension_access_age = 57;
+
+        inputs.isa_start = 0.0;
+        inputs.taxable_start = 0.0;
+        inputs.taxable_cost_basis_start = 0.0;
+        inputs.pension_start = 0.0;
+        inputs.cash_start = 0.0;
+
+        inputs.isa_annual_contribution = 30_000.0;
+        inputs.isa_annual_contribution_limit = 20_000.0;
+        inputs.taxable_annual_contribution = 5_000.0;
+        inputs.pension_annual_contribution = 0.0;
+        inputs.contribution_growth_rate = 0.10;
+
+        // Hand calculation:
+        // Year 0: ISA 20k, taxable 5k + (30k-20k) = 15k
+        // Year 1: ISA 20k, taxable 5.5k + (33k-20k) = 18.5k
+        // Year 2: ISA 20k, taxable 6.05k + (36.3k-20k) = 22.35k
+        // Retirement balances: ISA 60k, taxable 55.85k
+        let mut rng = Rng::new(derive_seed(inputs.seed, 33, 0));
+        let scenario = simulate_scenario(&inputs, 33, 33, &mut rng, None);
+
+        assert!(scenario.success);
+        assert_approx(scenario.reported_retirement_isa, 60_000.0);
+        assert_approx(scenario.reported_retirement_taxable, 55_850.0);
+        assert_approx(scenario.reported_retirement_total, 115_850.0);
+        assert_approx(scenario.reported_terminal_total, 115_850.0);
+
+        let rows = run_yearly_cashflow_trace(&inputs, 33, 33, 33);
+        assert_eq!(rows.len(), 4);
+
+        assert_approx(rows[0].median_contribution_isa, 20_000.0);
+        assert_approx(rows[0].median_contribution_taxable, 15_000.0);
+        assert_approx(rows[0].median_contribution_total, 35_000.0);
+        assert_approx(rows[0].median_end_isa, 20_000.0);
+        assert_approx(rows[0].median_end_taxable, 15_000.0);
+
+        assert_approx(rows[1].median_contribution_isa, 20_000.0);
+        assert_approx(rows[1].median_contribution_taxable, 18_500.0);
+        assert_approx(rows[1].median_contribution_total, 38_500.0);
+        assert_approx(rows[1].median_end_isa, 40_000.0);
+        assert_approx(rows[1].median_end_taxable, 33_500.0);
+
+        assert_approx(rows[2].median_contribution_isa, 20_000.0);
+        assert_approx(rows[2].median_contribution_taxable, 22_350.0);
+        assert_approx(rows[2].median_contribution_total, 42_350.0);
+        assert_approx(rows[2].median_end_isa, 60_000.0);
+        assert_approx(rows[2].median_end_taxable, 55_850.0);
+
+        assert_approx(rows[3].median_contribution_total, 0.0);
+        assert_approx(rows[3].median_end_total, 115_850.0);
+    }
+
+    #[test]
+    fn oracle_taxable_first_withdrawal_applies_cgt_and_preserves_pension() {
+        let mut inputs = deterministic_oracle_inputs();
+        inputs.current_age = 30;
+        inputs.max_retirement_age = 30;
+        inputs.horizon_age = 31;
+        inputs.pension_access_age = 30;
+
+        inputs.isa_start = 100.0;
+        inputs.taxable_start = 100.0;
+        inputs.taxable_cost_basis_start = 50.0;
+        inputs.pension_start = 100.0;
+        inputs.cash_start = 0.0;
+        inputs.target_annual_income = 180.0;
+
+        inputs.capital_gains_tax_rate = 0.20;
+        inputs.capital_gains_allowance = 0.0;
+        inputs.post_access_withdrawal_order = WithdrawalOrder::TaxableFirst;
+
+        // Hand calculation:
+        // Taxable full sale: gross 100, gain 50, CGT 10, net 90.
+        // Remaining 90 from ISA. Pension untouched.
+        // Terminal: ISA 10, taxable 0, pension 100, total 110.
+        let mut rng = Rng::new(derive_seed(inputs.seed, 30, 0));
+        let scenario = simulate_scenario(&inputs, 30, 30, &mut rng, None);
+
+        assert!(scenario.success);
+        assert_approx(scenario.reported_retirement_total, 300.0);
+        assert_approx(scenario.reported_terminal_isa, 10.0);
+        assert_approx(scenario.reported_terminal_taxable, 0.0);
+        assert_approx(scenario.reported_terminal_pension, 100.0);
+        assert_approx(scenario.reported_terminal_total, 110.0);
+        assert_approx(scenario.min_income_ratio, 1.0);
+
+        let rows = run_yearly_cashflow_trace(&inputs, 30, 30, 30);
+        assert_eq!(rows.len(), 1);
+        assert_approx(rows[0].median_withdrawal_portfolio, 180.0);
+        assert_approx(rows[0].median_tax_cgt, 10.0);
+        assert_approx(rows[0].median_tax_income, 0.0);
+        assert_approx(rows[0].median_end_isa, 10.0);
+        assert_approx(rows[0].median_end_taxable, 0.0);
+        assert_approx(rows[0].median_end_pension, 100.0);
+    }
+
+    #[test]
+    fn oracle_pension_withdrawal_uses_gross_up_for_flat_income_tax() {
+        let mut inputs = deterministic_oracle_inputs();
+        inputs.current_age = 30;
+        inputs.max_retirement_age = 30;
+        inputs.horizon_age = 31;
+        inputs.pension_access_age = 30;
+
+        inputs.isa_start = 0.0;
+        inputs.taxable_start = 0.0;
+        inputs.taxable_cost_basis_start = 0.0;
+        inputs.pension_start = 100.0;
+        inputs.cash_start = 0.0;
+        inputs.target_annual_income = 80.0;
+
+        inputs.pension_tax_mode = PensionTaxMode::FlatRate;
+        inputs.pension_flat_tax_rate = 0.20;
+        inputs.post_access_withdrawal_order = WithdrawalOrder::PensionFirst;
+
+        let mut rng = Rng::new(derive_seed(inputs.seed, 30, 0));
+        let scenario = simulate_scenario(&inputs, 30, 30, &mut rng, None);
+        assert!(scenario.success);
+        assert_approx_tol(scenario.reported_terminal_pension, 0.0, 1e-6);
+        assert_approx_tol(scenario.reported_terminal_total, 0.0, 1e-6);
+        assert_approx(scenario.min_income_ratio, 1.0);
+
+        let rows = run_yearly_cashflow_trace(&inputs, 30, 30, 30);
+        assert_eq!(rows.len(), 1);
+        assert_approx_tol(rows[0].median_withdrawal_portfolio, 80.0, 1e-5);
+        assert_approx_tol(rows[0].median_tax_income, 20.0, 1e-5);
+        assert_approx_tol(rows[0].median_end_pension, 0.0, 1e-6);
+        assert_approx_tol(rows[0].median_end_total, 0.0, 1e-6);
     }
 
     #[test]
