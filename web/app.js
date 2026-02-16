@@ -215,6 +215,12 @@
   const cashflowTitle = document.getElementById("cashflow-title");
   const ageColHeader = document.getElementById("age-col-header");
   const chart = document.getElementById("success-chart");
+  const strategyGuideSelected = document.getElementById(
+    "strategy-guide-selected"
+  );
+  const strategyGuideCards = Array.from(
+    document.querySelectorAll("[data-strategy-card]")
+  );
   const quickPresetButtons = Array.from(
     document.querySelectorAll(".quick-preset")
   );
@@ -1243,7 +1249,34 @@
     applyConditionalVisibility();
     updateValueHints();
     updateLiveSummary();
+    updateStrategyGuide();
     validateInline();
+  }
+
+  function updateStrategyGuide() {
+    if (strategyGuideCards.length === 0) {
+      return;
+    }
+
+    const mode = currentInputMode();
+    let selectedStrategy = "guardrails";
+    if (mode === "basic") {
+      const key = selectedValue("riskProfile");
+      const profile = BASIC_RISK_PROFILES[key] || BASIC_RISK_PROFILES.balanced;
+      selectedStrategy = String(profile.withdrawalPolicy || "guardrails");
+    } else {
+      selectedStrategy = selectedValue("withdrawalPolicy") || "guardrails";
+    }
+
+    strategyGuideCards.forEach((card) => {
+      const strategy = String(card.getAttribute("data-strategy") || "");
+      card.classList.toggle("is-active", strategy === selectedStrategy);
+    });
+
+    if (strategyGuideSelected) {
+      strategyGuideSelected.textContent =
+        `Currently selected: ${humanizeWithdrawalPolicy(selectedStrategy)}`;
+    }
   }
 
   function normalizeDerivedValuesForMode() {

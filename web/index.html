@@ -210,6 +210,67 @@
       </form>
     </section>
 
+    <section class="panel strategy-guide" id="strategy-guide">
+      <h2>Withdrawal Strategy Guide</h2>
+      <p class="strategy-guide-intro">
+        Each strategy changes how spending reacts to market moves. Pick based on how stable you need your income to be versus how much flexibility you can tolerate.
+      </p>
+      <p class="strategy-guide-selected">
+        <strong id="strategy-guide-selected">Currently selected: Dynamic Guardrails</strong>
+      </p>
+      <div class="strategy-guide-grid">
+        <article class="strategy-card" data-strategy-card data-strategy="guardrails">
+          <h3>Dynamic Guardrails <span class="strategy-badge">Default</span></h3>
+          <p>Adjusts spending up after strong years and down after weak years using your thresholds, floor, and ceiling.</p>
+          <ul>
+            <li><strong>Use when:</strong> you want a balanced approach with moderate income variability.</li>
+            <li><strong>Tradeoff:</strong> can cut spending in bad sequences of returns.</li>
+            <li><strong>Tune with:</strong> <code>Bad Year Threshold</code>, <code>Good Year Threshold</code>, <code>Bad Year Cut</code>, <code>Good Year Raise</code>.</li>
+          </ul>
+        </article>
+
+        <article class="strategy-card" data-strategy-card data-strategy="guyton-klinger">
+          <h3>Guyton-Klinger</h3>
+          <p>Uses withdrawal-rate guardrails around your initial withdrawal rate to trigger increases or cuts.</p>
+          <ul>
+            <li><strong>Use when:</strong> you want a rules-based spending method tied to portfolio health.</li>
+            <li><strong>Tradeoff:</strong> spending changes can be more frequent near guardrails.</li>
+            <li><strong>Tune with:</strong> <code>GK Lower Guardrail</code>, <code>GK Upper Guardrail</code>, and bad/good-year settings.</li>
+          </ul>
+        </article>
+
+        <article class="strategy-card" data-strategy-card data-strategy="vpw">
+          <h3>VPW (Variable Percentage Withdrawal)</h3>
+          <p>Withdraws a percentage based on years remaining and expected real return, usually varying more by age and market level.</p>
+          <ul>
+            <li><strong>Use when:</strong> you accept higher income variation to reduce ruin risk over a fixed horizon.</li>
+            <li><strong>Tradeoff:</strong> spending can drop sharply after downturns.</li>
+            <li><strong>Tune with:</strong> <code>VPW Expected Real Return</code>, plus floor/ceiling limits.</li>
+          </ul>
+        </article>
+
+        <article class="strategy-card" data-strategy-card data-strategy="floor-upside">
+          <h3>Floor + Upside</h3>
+          <p>Protects a spending floor and captures part of positive returns as higher spending.</p>
+          <ul>
+            <li><strong>Use when:</strong> you need downside protection but still want some upside participation.</li>
+            <li><strong>Tradeoff:</strong> may lag other strategies in long bull markets if upside capture is conservative.</li>
+            <li><strong>Tune with:</strong> <code>Floor + Upside Capture</code>, floor/ceiling, and bad-year cut.</li>
+          </ul>
+        </article>
+
+        <article class="strategy-card" data-strategy-card data-strategy="bucket">
+          <h3>Bucket (Cash Reserve)</h3>
+          <p>Keeps a cash reserve and, in good years, withdraws extra into cash to fund future spending stability.</p>
+          <ul>
+            <li><strong>Use when:</strong> you value smoother near-term spending and psychological comfort from cash reserves.</li>
+            <li><strong>Tradeoff:</strong> too much cash can drag long-run growth.</li>
+            <li><strong>Tune with:</strong> <code>Bucket Cash Target</code>, <code>Good-Year Extra to Cash Buffer</code>, <code>Cash Growth</code>.</li>
+          </ul>
+        </article>
+      </div>
+    </section>
+
     <section class="panel results">
       <h2>Summary</h2>
       <div id="summary-cards" class="cards"></div>

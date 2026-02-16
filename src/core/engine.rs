@@ -1561,6 +1561,171 @@ mod tests {
         inputs
     }
 
+    fn configure_metamorphic_inputs(inputs: &mut Inputs) {
+        inputs.withdrawal_strategy = WithdrawalStrategy::Guardrails;
+        inputs.bad_year_threshold = -2.0;
+        inputs.good_year_threshold = 2.0;
+        inputs.bad_year_cut = 0.0;
+        inputs.good_year_raise = 0.0;
+        inputs.min_income_floor = 1.0;
+        inputs.max_income_ceiling = 1.0;
+        inputs.good_year_extra_buffer_withdrawal = 0.0;
+
+        inputs.capital_gains_tax_rate = 0.0;
+        inputs.capital_gains_allowance = 0.0;
+        inputs.taxable_return_tax_drag = 0.0;
+        inputs.pension_tax_mode = PensionTaxMode::FlatRate;
+        inputs.pension_flat_tax_rate = 0.0;
+        inputs.state_pension_start_age = 200;
+        inputs.state_pension_annual_income = 0.0;
+        inputs.mortgage_annual_payment = 0.0;
+        inputs.mortgage_end_age = None;
+        inputs.cash_growth_rate = 0.0;
+        inputs.post_access_withdrawal_order = WithdrawalOrder::ProRata;
+    }
+
+    fn trace_row_is_all_zero(row: &YearTracePoint) -> bool {
+        [
+            row.contribution_isa_real,
+            row.contribution_taxable_real,
+            row.contribution_pension_real,
+            row.contribution_total_real,
+            row.withdrawal_portfolio_real,
+            row.withdrawal_non_pension_income_real,
+            row.spending_total_real,
+            row.tax_cgt_real,
+            row.tax_income_real,
+            row.tax_total_real,
+            row.end_isa_real,
+            row.end_taxable_real,
+            row.end_pension_real,
+            row.end_cash_real,
+            row.end_total_real,
+        ]
+        .iter()
+        .all(|v| v.abs() <= 1e-9)
+    }
+
+    fn assert_models_approx_equal(left: &ModelResult, right: &ModelResult) {
+        assert_eq!(left.selected_index, right.selected_index);
+        assert_eq!(left.best_index, right.best_index);
+        assert_eq!(left.age_results.len(), right.age_results.len());
+
+        for (a, b) in left.age_results.iter().zip(right.age_results.iter()) {
+            assert_eq!(a.retirement_age, b.retirement_age);
+            for (label, l, r) in [
+                ("success_rate", a.success_rate, b.success_rate),
+                (
+                    "median_retirement_pot",
+                    a.median_retirement_pot,
+                    b.median_retirement_pot,
+                ),
+                (
+                    "p10_retirement_pot",
+                    a.p10_retirement_pot,
+                    b.p10_retirement_pot,
+                ),
+                (
+                    "median_retirement_isa",
+                    a.median_retirement_isa,
+                    b.median_retirement_isa,
+                ),
+                (
+                    "p10_retirement_isa",
+                    a.p10_retirement_isa,
+                    b.p10_retirement_isa,
+                ),
+                (
+                    "median_retirement_taxable",
+                    a.median_retirement_taxable,
+                    b.median_retirement_taxable,
+                ),
+                (
+                    "p10_retirement_taxable",
+                    a.p10_retirement_taxable,
+                    b.p10_retirement_taxable,
+                ),
+                (
+                    "median_retirement_pension",
+                    a.median_retirement_pension,
+                    b.median_retirement_pension,
+                ),
+                (
+                    "p10_retirement_pension",
+                    a.p10_retirement_pension,
+                    b.p10_retirement_pension,
+                ),
+                (
+                    "median_retirement_cash",
+                    a.median_retirement_cash,
+                    b.median_retirement_cash,
+                ),
+                (
+                    "p10_retirement_cash",
+                    a.p10_retirement_cash,
+                    b.p10_retirement_cash,
+                ),
+                (
+                    "median_terminal_pot",
+                    a.median_terminal_pot,
+                    b.median_terminal_pot,
+                ),
+                ("p10_terminal_pot", a.p10_terminal_pot, b.p10_terminal_pot),
+                (
+                    "median_terminal_isa",
+                    a.median_terminal_isa,
+                    b.median_terminal_isa,
+                ),
+                ("p10_terminal_isa", a.p10_terminal_isa, b.p10_terminal_isa),
+                (
+                    "median_terminal_taxable",
+                    a.median_terminal_taxable,
+                    b.median_terminal_taxable,
+                ),
+                (
+                    "p10_terminal_taxable",
+                    a.p10_terminal_taxable,
+                    b.p10_terminal_taxable,
+                ),
+                (
+                    "median_terminal_pension",
+                    a.median_terminal_pension,
+                    b.median_terminal_pension,
+                ),
+                (
+                    "p10_terminal_pension",
+                    a.p10_terminal_pension,
+                    b.p10_terminal_pension,
+                ),
+                (
+                    "median_terminal_cash",
+                    a.median_terminal_cash,
+                    b.median_terminal_cash,
+                ),
+                (
+                    "p10_terminal_cash",
+                    a.p10_terminal_cash,
+                    b.p10_terminal_cash,
+                ),
+                (
+                    "p10_min_income_ratio",
+                    a.p10_min_income_ratio,
+                    b.p10_min_income_ratio,
+                ),
+                (
+                    "median_avg_income_ratio",
+                    a.median_avg_income_ratio,
+                    b.median_avg_income_ratio,
+                ),
+            ] {
+                assert!(
+                    (l - r).abs() <= 1e-9,
+                    "field {label}: expected {l}, got {r}"
+                );
+            }
+        }
+    }
+
     fn assert_finite_non_negative(value: f64, label: &str) {
         assert!(value.is_finite(), "{label} must be finite");
         assert!(value >= -1e-6, "{label} must be non-negative");
@@ -1752,6 +1917,760 @@ mod tests {
                 + age.median_terminal_pension
                 + age.median_terminal_cash;
             prop_assert!((median_terminal_sum - age.median_terminal_pot).abs() < 1e-3);
+        }
+    }
+
+    proptest! {
+        #![proptest_config(proptest::test_runner::Config::with_cases(24))]
+
+        #[test]
+        fn prop_trace_rows_have_finite_non_negative_balances_and_consistent_zero_suffix(
+            seed in any::<u64>(),
+            current_age in 25u32..56,
+            retirement_span in 0u32..6,
+            horizon_extra in 1u32..10,
+            pension_access_offset in 0u32..26,
+            isa_start in 0u32..500_000,
+            taxable_start in 0u32..400_000,
+            pension_start in 0u32..700_000,
+            cash_start in 0u32..120_000,
+            target_income in 10_000u32..100_000,
+            isa_mean_bp in -500i32..1600,
+            taxable_mean_bp in -500i32..1600,
+            pension_mean_bp in -500i32..1600,
+            isa_vol_bp in 0u32..2500,
+            taxable_vol_bp in 0u32..2500,
+            pension_vol_bp in 0u32..2500,
+            inflation_mean_bp in 0u32..700,
+            inflation_vol_bp in 0u32..300
+        ) {
+            let mut inputs = sample_inputs();
+            inputs.seed = seed;
+            inputs.simulations = 1;
+            inputs.current_age = current_age;
+            let retirement_age = current_age + retirement_span;
+            inputs.max_retirement_age = retirement_age;
+            inputs.horizon_age = retirement_age + horizon_extra + 1;
+            inputs.pension_access_age = (current_age + pension_access_offset).min(inputs.horizon_age - 1);
+
+            inputs.isa_start = isa_start as f64;
+            inputs.taxable_start = taxable_start as f64;
+            inputs.taxable_cost_basis_start = inputs.taxable_start;
+            inputs.pension_start = pension_start as f64;
+            inputs.cash_start = cash_start as f64;
+            inputs.target_annual_income = target_income as f64;
+
+            inputs.isa_return_mean = isa_mean_bp as f64 / 10_000.0;
+            inputs.taxable_return_mean = taxable_mean_bp as f64 / 10_000.0;
+            inputs.pension_return_mean = pension_mean_bp as f64 / 10_000.0;
+            inputs.isa_return_vol = isa_vol_bp as f64 / 10_000.0;
+            inputs.taxable_return_vol = taxable_vol_bp as f64 / 10_000.0;
+            inputs.pension_return_vol = pension_vol_bp as f64 / 10_000.0;
+            inputs.inflation_mean = inflation_mean_bp as f64 / 10_000.0;
+            inputs.inflation_vol = inflation_vol_bp as f64 / 10_000.0;
+
+            let mut trace = Vec::new();
+            let mut rng = Rng::new(derive_seed(inputs.seed, retirement_age, 0));
+            let scenario = simulate_scenario(
+                &inputs,
+                retirement_age,
+                retirement_age,
+                &mut rng,
+                Some(&mut trace),
+            );
+
+            prop_assert!(trace.len() == (inputs.horizon_age - inputs.current_age) as usize);
+            prop_assert!(scenario.success as u8 <= 1);
+            for (label, value) in [
+                ("reported_retirement_total", scenario.reported_retirement_total),
+                ("reported_retirement_isa", scenario.reported_retirement_isa),
+                ("reported_retirement_taxable", scenario.reported_retirement_taxable),
+                ("reported_retirement_pension", scenario.reported_retirement_pension),
+                ("reported_retirement_cash", scenario.reported_retirement_cash),
+                ("reported_terminal_total", scenario.reported_terminal_total),
+                ("reported_terminal_isa", scenario.reported_terminal_isa),
+                ("reported_terminal_taxable", scenario.reported_terminal_taxable),
+                ("reported_terminal_pension", scenario.reported_terminal_pension),
+                ("reported_terminal_cash", scenario.reported_terminal_cash),
+                ("min_income_ratio", scenario.min_income_ratio),
+                ("avg_income_ratio", scenario.avg_income_ratio),
+            ] {
+                prop_assert!(value.is_finite(), "{label} must be finite");
+                prop_assert!(value >= -1e-6, "{label} must be non-negative");
+            }
+
+            let mut saw_zero_row = false;
+            for row in &trace {
+                for value in [
+                    row.contribution_isa_real,
+                    row.contribution_taxable_real,
+                    row.contribution_pension_real,
+                    row.contribution_total_real,
+                    row.withdrawal_portfolio_real,
+                    row.withdrawal_non_pension_income_real,
+                    row.spending_total_real,
+                    row.tax_cgt_real,
+                    row.tax_income_real,
+                    row.tax_total_real,
+                    row.end_isa_real,
+                    row.end_taxable_real,
+                    row.end_pension_real,
+                    row.end_cash_real,
+                    row.end_total_real,
+                ] {
+                    prop_assert!(value.is_finite());
+                }
+
+                prop_assert!(row.end_isa_real >= -1e-6);
+                prop_assert!(row.end_taxable_real >= -1e-6);
+                prop_assert!(row.end_pension_real >= -1e-6);
+                prop_assert!(row.end_cash_real >= -1e-6);
+                prop_assert!(row.end_total_real >= -1e-6);
+
+                let reconstructed_end = row.end_isa_real
+                    + row.end_taxable_real
+                    + row.end_pension_real
+                    + row.end_cash_real;
+                prop_assert!((row.end_total_real - reconstructed_end).abs() <= 1e-4);
+
+                if row.end_total_real <= 1e-9 {
+                    prop_assert!(row.end_isa_real.abs() <= 1e-6);
+                    prop_assert!(row.end_taxable_real.abs() <= 1e-6);
+                    prop_assert!(row.end_pension_real.abs() <= 1e-6);
+                    prop_assert!(row.end_cash_real.abs() <= 1e-6);
+                }
+
+                let all_zero = trace_row_is_all_zero(row);
+                if saw_zero_row {
+                    prop_assert!(all_zero);
+                } else if all_zero {
+                    saw_zero_row = true;
+                }
+            }
+        }
+    }
+
+    proptest! {
+        #![proptest_config(proptest::test_runner::Config::with_cases(28))]
+
+        #[test]
+        fn prop_pre_retirement_yearly_accounting_identity_per_pot(
+            years in 2u32..7,
+            isa_start in 0u32..200_000,
+            taxable_start in 0u32..200_000,
+            pension_start in 0u32..300_000,
+            taxable_basis_pct in 0u32..101,
+            isa_contrib in 0u32..50_000,
+            taxable_contrib in 0u32..30_000,
+            pension_contrib in 0u32..20_000,
+            isa_limit in 5_000u32..40_001,
+            contribution_growth_bp in 0u32..1_001,
+            isa_return_bp in -500i32..1_501,
+            taxable_return_bp in -500i32..1_501,
+            pension_return_bp in -500i32..1_501,
+            tax_drag_bp in 0u32..501
+        ) {
+            let mut inputs = deterministic_oracle_inputs();
+            inputs.current_age = 30;
+            inputs.max_retirement_age = 30 + years;
+            inputs.horizon_age = 30 + years;
+            inputs.pension_access_age = 80;
+            inputs.seed = 11;
+            inputs.simulations = 1;
+
+            inputs.isa_start = isa_start as f64;
+            inputs.taxable_start = taxable_start as f64;
+            inputs.taxable_cost_basis_start =
+                inputs.taxable_start * (taxable_basis_pct as f64 / 100.0);
+            inputs.pension_start = pension_start as f64;
+            inputs.cash_start = 0.0;
+
+            inputs.isa_annual_contribution = isa_contrib as f64;
+            inputs.taxable_annual_contribution = taxable_contrib as f64;
+            inputs.pension_annual_contribution = pension_contrib as f64;
+            inputs.isa_annual_contribution_limit = isa_limit as f64;
+            inputs.contribution_growth_rate = contribution_growth_bp as f64 / 10_000.0;
+
+            inputs.isa_return_mean = isa_return_bp as f64 / 10_000.0;
+            inputs.taxable_return_mean = taxable_return_bp as f64 / 10_000.0;
+            inputs.pension_return_mean = pension_return_bp as f64 / 10_000.0;
+            inputs.isa_return_vol = 0.0;
+            inputs.taxable_return_vol = 0.0;
+            inputs.pension_return_vol = 0.0;
+            inputs.inflation_mean = 0.0;
+            inputs.inflation_vol = 0.0;
+            inputs.taxable_return_tax_drag = tax_drag_bp as f64 / 10_000.0;
+            inputs.target_annual_income = 0.0;
+
+            let rows = run_yearly_cashflow_trace(
+                &inputs,
+                inputs.max_retirement_age,
+                inputs.max_retirement_age,
+                inputs.max_retirement_age,
+            );
+            prop_assert!(rows.len() == years as usize);
+
+            let mut expected_isa = inputs.isa_start;
+            let mut expected_taxable = inputs.taxable_start;
+            let mut expected_pension = inputs.pension_start;
+
+            for (year, row) in rows.iter().enumerate() {
+                let y = year as u32;
+
+                let isa_after_growth = (expected_isa * (1.0 + inputs.isa_return_mean)).max(0.0);
+                let taxable_after_growth =
+                    (expected_taxable * (1.0 + inputs.taxable_return_mean)).max(0.0);
+                let taxable_after_growth =
+                    (taxable_after_growth * (1.0 - inputs.taxable_return_tax_drag)).max(0.0);
+                let pension_after_growth =
+                    (expected_pension * (1.0 + inputs.pension_return_mean)).max(0.0);
+
+                let multiplier = (1.0 + inputs.contribution_growth_rate).powi(y as i32);
+                let requested_isa = inputs.isa_annual_contribution * multiplier;
+                let requested_taxable = inputs.taxable_annual_contribution * multiplier;
+                let requested_pension = inputs.pension_annual_contribution * multiplier;
+
+                let isa_add = requested_isa.max(0.0).min(inputs.isa_annual_contribution_limit);
+                let overflow = (requested_isa - isa_add).max(0.0);
+                let taxable_add = requested_taxable.max(0.0) + overflow;
+                let pension_add = requested_pension.max(0.0);
+
+                let expected_isa_end = isa_after_growth + isa_add;
+                let expected_taxable_end = taxable_after_growth + taxable_add;
+                let expected_pension_end = pension_after_growth + pension_add;
+
+                prop_assert!((row.median_contribution_isa - isa_add).abs() <= 1e-6);
+                prop_assert!((row.median_contribution_taxable - taxable_add).abs() <= 1e-6);
+                prop_assert!((row.median_contribution_pension - pension_add).abs() <= 1e-6);
+                prop_assert!(
+                    (row.median_contribution_total - (isa_add + taxable_add + pension_add)).abs()
+                        <= 1e-6
+                );
+                prop_assert!((row.median_end_isa - expected_isa_end).abs() <= 1e-6);
+                prop_assert!((row.median_end_taxable - expected_taxable_end).abs() <= 1e-6);
+                prop_assert!((row.median_end_pension - expected_pension_end).abs() <= 1e-6);
+
+                let expected_total = expected_isa_end + expected_taxable_end + expected_pension_end;
+                prop_assert!((row.median_end_total - expected_total).abs() <= 1e-6);
+
+                expected_isa = expected_isa_end;
+                expected_taxable = expected_taxable_end;
+                expected_pension = expected_pension_end;
+            }
+        }
+    }
+
+    proptest! {
+        #![proptest_config(proptest::test_runner::Config::with_cases(24))]
+
+        #[test]
+        fn prop_single_retirement_year_identity_holds_with_withdrawals_taxes_and_growth(
+            isa_start in 0u32..300_000,
+            taxable_start in 0u32..300_000,
+            taxable_basis_pct in 0u32..101,
+            pension_start in 0u32..300_000,
+            cash_start in 0u32..100_000,
+            isa_return_bp in -300i32..1_201,
+            taxable_return_bp in -300i32..1_201,
+            pension_return_bp in -300i32..1_201,
+            cash_growth_bp in 0u32..501,
+            cgt_rate_bp in 0u32..3_501,
+            cgt_allowance in 0u32..20_000,
+            pension_tax_bp in 0u32..4_501,
+            spend_ratio_pct in 5u32..71
+        ) {
+            let mut inputs = deterministic_oracle_inputs();
+            inputs.current_age = 30;
+            inputs.max_retirement_age = 30;
+            inputs.horizon_age = 31;
+            inputs.pension_access_age = 30;
+            inputs.seed = 19;
+            inputs.simulations = 1;
+
+            inputs.isa_start = isa_start as f64;
+            inputs.taxable_start = taxable_start as f64;
+            inputs.taxable_cost_basis_start =
+                inputs.taxable_start * (taxable_basis_pct as f64 / 100.0);
+            inputs.pension_start = pension_start as f64;
+            inputs.cash_start = cash_start as f64;
+
+            inputs.isa_return_mean = isa_return_bp as f64 / 10_000.0;
+            inputs.taxable_return_mean = taxable_return_bp as f64 / 10_000.0;
+            inputs.pension_return_mean = pension_return_bp as f64 / 10_000.0;
+            inputs.isa_return_vol = 0.0;
+            inputs.taxable_return_vol = 0.0;
+            inputs.pension_return_vol = 0.0;
+            inputs.inflation_mean = 0.0;
+            inputs.inflation_vol = 0.0;
+            inputs.cash_growth_rate = cash_growth_bp as f64 / 10_000.0;
+
+            inputs.capital_gains_tax_rate = cgt_rate_bp as f64 / 10_000.0;
+            inputs.capital_gains_allowance = cgt_allowance as f64;
+            inputs.pension_tax_mode = PensionTaxMode::FlatRate;
+            inputs.pension_flat_tax_rate = pension_tax_bp as f64 / 10_000.0;
+            inputs.state_pension_start_age = 200;
+            inputs.state_pension_annual_income = 0.0;
+
+            inputs.withdrawal_strategy = WithdrawalStrategy::Guardrails;
+            inputs.bad_year_threshold = -2.0;
+            inputs.good_year_threshold = 2.0;
+            inputs.bad_year_cut = 0.0;
+            inputs.good_year_raise = 0.0;
+            inputs.min_income_floor = 1.0;
+            inputs.max_income_ceiling = 1.0;
+            inputs.good_year_extra_buffer_withdrawal = 0.0;
+            inputs.post_access_withdrawal_order = WithdrawalOrder::ProRata;
+
+            let tax_state0 = TaxYearState {
+                non_pension_taxable_income: 0.0,
+                pension_gross_withdrawn: 0.0,
+                price_index: 1.0,
+            };
+            let taxable_net_capacity = net_from_taxable_gross(
+                inputs.taxable_start,
+                inputs.taxable_start,
+                inputs.taxable_cost_basis_start,
+                inputs.capital_gains_allowance,
+                inputs.capital_gains_tax_rate,
+            );
+            let pension_net_capacity =
+                net_from_additional_pension_gross(inputs.pension_start, &tax_state0, &inputs);
+            let net_capacity =
+                inputs.cash_start + inputs.isa_start + taxable_net_capacity + pension_net_capacity;
+            prop_assume!(net_capacity > 10.0);
+
+            inputs.target_annual_income = net_capacity * spend_ratio_pct as f64 / 100.0;
+
+            let mut trace = Vec::new();
+            let mut rng = Rng::new(derive_seed(inputs.seed, 30, 0));
+            let scenario = simulate_scenario(&inputs, 30, 30, &mut rng, Some(&mut trace));
+            prop_assume!(scenario.success);
+            prop_assert!(trace.len() == 1);
+
+            let sampled = MarketSample {
+                isa_return: inputs.isa_return_mean,
+                taxable_return: inputs.taxable_return_mean,
+                pension_return: inputs.pension_return_mean,
+                inflation: inputs.inflation_mean,
+            };
+            let mut portfolio = Portfolio {
+                isa: inputs.isa_start,
+                taxable: inputs.taxable_start,
+                taxable_basis: inputs.taxable_cost_basis_start,
+                pension: inputs.pension_start,
+                cash_buffer: inputs.cash_start,
+            };
+
+            let total_start = portfolio.isa + portfolio.taxable + portfolio.pension + portfolio.cash_buffer;
+            let mut spending_state = SpendingState {
+                current_real_spending: inputs.target_annual_income,
+                initial_withdrawal_rate: inputs.target_annual_income / total_start.max(1e-9),
+            };
+            let planned_real_spending = plan_real_spending(
+                &inputs,
+                30,
+                0.0,
+                available_spendable_real(&inputs, 30, &portfolio, 1.0),
+                &mut spending_state,
+            );
+            let planned_nominal_spending = planned_real_spending;
+
+            let mut cgt_state = CgtState {
+                allowance_remaining: inputs.capital_gains_allowance,
+                tax_paid: 0.0,
+            };
+            let mut tax_state = TaxYearState {
+                non_pension_taxable_income: 0.0,
+                pension_gross_withdrawn: 0.0,
+                price_index: 1.0,
+            };
+
+            let start_isa = portfolio.isa;
+            let start_taxable = portfolio.taxable;
+            let start_pension = portfolio.pension;
+            let start_cash = portfolio.cash_buffer;
+
+            let outcome = run_withdrawal_year(
+                &inputs,
+                30,
+                planned_nominal_spending,
+                0.0,
+                planned_real_spending,
+                &mut portfolio,
+                &mut cgt_state,
+                &mut tax_state,
+                0.0,
+            );
+            prop_assert!(outcome.realized_spending_net + 1e-6 >= planned_nominal_spending);
+
+            let after_withdraw_isa = portfolio.isa;
+            let after_withdraw_taxable = portfolio.taxable;
+            let after_withdraw_pension = portfolio.pension;
+            let after_withdraw_cash = portfolio.cash_buffer;
+
+            let isa_withdrawn_gross = (start_isa - after_withdraw_isa).max(0.0);
+            let taxable_withdrawn_gross = (start_taxable - after_withdraw_taxable).max(0.0);
+            let pension_withdrawn_gross = (start_pension - after_withdraw_pension).max(0.0);
+            let cash_used = (start_cash - after_withdraw_cash).max(0.0);
+
+            let portfolio_withdrawn_gross =
+                isa_withdrawn_gross + taxable_withdrawn_gross + pension_withdrawn_gross;
+            prop_assert!(
+                (portfolio_withdrawn_gross
+                    - (outcome.portfolio_withdrawn_net + outcome.total_tax_paid()))
+                .abs()
+                    <= 1e-3
+            );
+
+            apply_post_retirement_growth(&inputs, &mut portfolio, &sampled);
+
+            let expected_isa_end = (after_withdraw_isa * (1.0 + inputs.isa_return_mean)).max(0.0);
+            let expected_taxable_end = ((after_withdraw_taxable
+                * (1.0 + inputs.taxable_return_mean))
+            .max(0.0)
+                * (1.0 - inputs.taxable_return_tax_drag))
+                .max(0.0);
+            let expected_pension_end =
+                (after_withdraw_pension * (1.0 + inputs.pension_return_mean)).max(0.0);
+            let expected_cash_end = (after_withdraw_cash * (1.0 + inputs.cash_growth_rate)).max(0.0);
+
+            prop_assert!((portfolio.isa - expected_isa_end).abs() <= 1e-6);
+            prop_assert!((portfolio.taxable - expected_taxable_end).abs() <= 1e-6);
+            prop_assert!((portfolio.pension - expected_pension_end).abs() <= 1e-6);
+            prop_assert!((portfolio.cash_buffer - expected_cash_end).abs() <= 1e-6);
+
+            // Pot-level accounting identity:
+            // end = start + contributions(0) - gross_withdrawals + market_move
+            let isa_market_move = expected_isa_end - after_withdraw_isa;
+            let taxable_market_move = expected_taxable_end - after_withdraw_taxable;
+            let pension_market_move = expected_pension_end - after_withdraw_pension;
+            let cash_market_move = expected_cash_end - after_withdraw_cash;
+
+            let isa_identity_end = start_isa - isa_withdrawn_gross + isa_market_move;
+            let taxable_identity_end = start_taxable - taxable_withdrawn_gross + taxable_market_move;
+            let pension_identity_end = start_pension - pension_withdrawn_gross + pension_market_move;
+            let cash_identity_end = start_cash - cash_used + cash_market_move;
+
+            prop_assert!((isa_identity_end - expected_isa_end).abs() <= 1e-6);
+            prop_assert!((taxable_identity_end - expected_taxable_end).abs() <= 1e-6);
+            prop_assert!((pension_identity_end - expected_pension_end).abs() <= 1e-6);
+            prop_assert!((cash_identity_end - expected_cash_end).abs() <= 1e-6);
+
+            let row = &trace[0];
+            prop_assert!((row.withdrawal_portfolio_real - outcome.portfolio_withdrawn_net).abs() <= 1e-4);
+            prop_assert!((row.tax_total_real - outcome.total_tax_paid()).abs() <= 1e-4);
+            prop_assert!((row.spending_total_real - outcome.realized_spending_net).abs() <= 1e-4);
+            prop_assert!((row.end_isa_real - expected_isa_end).abs() <= 1e-6);
+            prop_assert!((row.end_taxable_real - expected_taxable_end).abs() <= 1e-6);
+            prop_assert!((row.end_pension_real - expected_pension_end).abs() <= 1e-6);
+            prop_assert!((row.end_cash_real - expected_cash_end).abs() <= 1e-6);
+        }
+    }
+
+    proptest! {
+        #![proptest_config(proptest::test_runner::Config::with_cases(24))]
+
+        #[test]
+        fn prop_terminal_best_decile_bounds_median_and_worst_decile(
+            seed in any::<u64>(),
+            current_age in 25u32..56,
+            retirement_span in 0u32..6,
+            horizon_extra in 1u32..10,
+            simulations in 10u32..64,
+            target_income in 10_000u32..90_000
+        ) {
+            let mut inputs = sample_inputs();
+            inputs.seed = seed;
+            inputs.current_age = current_age;
+            let retirement_age = current_age + retirement_span;
+            inputs.max_retirement_age = retirement_age;
+            inputs.horizon_age = retirement_age + horizon_extra + 1;
+            inputs.pension_access_age = (current_age + 20).min(inputs.horizon_age - 1);
+            inputs.simulations = simulations;
+            inputs.target_annual_income = target_income as f64;
+
+            let age_result =
+                evaluate_age_candidate(&inputs, retirement_age, retirement_age, retirement_age);
+
+            let mut terminal_totals = Vec::with_capacity(inputs.simulations as usize);
+            for scenario_id in 0..inputs.simulations {
+                let scenario_seed = derive_seed(inputs.seed, retirement_age, scenario_id);
+                let mut rng = Rng::new(scenario_seed);
+                let scenario =
+                    simulate_scenario(&inputs, retirement_age, retirement_age, &mut rng, None);
+                terminal_totals.push(scenario.reported_terminal_total);
+            }
+
+            let p90_terminal = percentile(&mut terminal_totals, 90.0);
+            prop_assert!(age_result.p10_terminal_pot <= age_result.median_terminal_pot + 1e-9);
+            prop_assert!(age_result.median_terminal_pot <= p90_terminal + 1e-9);
+            prop_assert!(age_result.p10_terminal_pot <= p90_terminal + 1e-9);
+        }
+    }
+
+    proptest! {
+        #![proptest_config(proptest::test_runner::Config::with_cases(16))]
+
+        #[test]
+        fn prop_higher_contributions_do_not_reduce_success_rate(
+            seed in any::<u64>(),
+            current_age in 30u32..51,
+            retirement_span in 0u32..7,
+            horizon_extra in 1u32..12,
+            simulations in 24u32..72,
+            isa_start in 0u32..300_000,
+            taxable_start in 0u32..200_000,
+            pension_start in 0u32..400_000,
+            target_income in 10_000u32..80_000,
+            return_mean_bp in -200i32..1001,
+            return_vol_bp in 500u32..2_001,
+            base_isa_contrib in 0u32..20_000,
+            base_taxable_contrib in 0u32..20_000,
+            base_pension_contrib in 0u32..20_000,
+            contribution_delta in 1u32..10_001
+        ) {
+            let mut low = sample_inputs();
+            configure_metamorphic_inputs(&mut low);
+            low.seed = seed;
+            low.current_age = current_age;
+            low.max_retirement_age = current_age + retirement_span;
+            low.horizon_age = low.max_retirement_age + horizon_extra + 1;
+            low.pension_access_age = (current_age + 20).min(low.horizon_age - 1);
+            low.simulations = simulations;
+
+            low.isa_start = isa_start as f64;
+            low.taxable_start = taxable_start as f64;
+            low.taxable_cost_basis_start = low.taxable_start;
+            low.pension_start = pension_start as f64;
+            low.target_annual_income = target_income as f64;
+
+            let mean = return_mean_bp as f64 / 10_000.0;
+            let vol = return_vol_bp as f64 / 10_000.0;
+            low.isa_return_mean = mean;
+            low.taxable_return_mean = mean;
+            low.pension_return_mean = mean;
+            low.isa_return_vol = vol;
+            low.taxable_return_vol = vol;
+            low.pension_return_vol = vol;
+
+            low.isa_annual_contribution = base_isa_contrib as f64;
+            low.taxable_annual_contribution = base_taxable_contrib as f64;
+            low.pension_annual_contribution = base_pension_contrib as f64;
+
+            let mut high = low.clone();
+            let delta = contribution_delta as f64;
+            high.isa_annual_contribution += delta;
+            high.taxable_annual_contribution += delta;
+            high.pension_annual_contribution += delta;
+
+            let low_model = run_model(&low);
+            let high_model = run_model(&high);
+
+            for (low_age, high_age) in low_model.age_results.iter().zip(high_model.age_results.iter()) {
+                prop_assert!(high_age.success_rate + 1e-9 >= low_age.success_rate);
+            }
+        }
+    }
+
+    proptest! {
+        #![proptest_config(proptest::test_runner::Config::with_cases(16))]
+
+        #[test]
+        fn prop_higher_expected_returns_do_not_reduce_success_rate(
+            seed in any::<u64>(),
+            current_age in 30u32..51,
+            retirement_span in 0u32..7,
+            horizon_extra in 1u32..12,
+            simulations in 24u32..72,
+            isa_start in 0u32..300_000,
+            taxable_start in 0u32..200_000,
+            pension_start in 0u32..400_000,
+            target_income in 10_000u32..80_000,
+            return_mean_bp in -200i32..901,
+            return_vol_bp in 500u32..2_001,
+            mean_delta_bp in 1u32..401
+        ) {
+            let mut lower = sample_inputs();
+            configure_metamorphic_inputs(&mut lower);
+            lower.seed = seed;
+            lower.current_age = current_age;
+            lower.max_retirement_age = current_age + retirement_span;
+            lower.horizon_age = lower.max_retirement_age + horizon_extra + 1;
+            lower.pension_access_age = (current_age + 20).min(lower.horizon_age - 1);
+            lower.simulations = simulations;
+
+            lower.isa_start = isa_start as f64;
+            lower.taxable_start = taxable_start as f64;
+            lower.taxable_cost_basis_start = lower.taxable_start;
+            lower.pension_start = pension_start as f64;
+            lower.target_annual_income = target_income as f64;
+
+            let base_mean = return_mean_bp as f64 / 10_000.0;
+            let vol = return_vol_bp as f64 / 10_000.0;
+            lower.isa_return_mean = base_mean;
+            lower.taxable_return_mean = base_mean;
+            lower.pension_return_mean = base_mean;
+            lower.isa_return_vol = vol;
+            lower.taxable_return_vol = vol;
+            lower.pension_return_vol = vol;
+
+            let mut higher = lower.clone();
+            let delta = mean_delta_bp as f64 / 10_000.0;
+            higher.isa_return_mean += delta;
+            higher.taxable_return_mean += delta;
+            higher.pension_return_mean += delta;
+
+            let lower_model = run_model(&lower);
+            let higher_model = run_model(&higher);
+
+            for (lo, hi) in lower_model.age_results.iter().zip(higher_model.age_results.iter()) {
+                prop_assert!(hi.success_rate + 1e-9 >= lo.success_rate);
+            }
+        }
+    }
+
+    proptest! {
+        #![proptest_config(proptest::test_runner::Config::with_cases(16))]
+
+        #[test]
+        fn prop_higher_target_income_does_not_improve_success_rate(
+            seed in any::<u64>(),
+            current_age in 30u32..51,
+            retirement_span in 0u32..7,
+            horizon_extra in 1u32..12,
+            simulations in 24u32..72,
+            isa_start in 0u32..300_000,
+            taxable_start in 0u32..200_000,
+            pension_start in 0u32..400_000,
+            return_mean_bp in -200i32..1001,
+            return_vol_bp in 500u32..2_001,
+            base_income in 8_000u32..70_000,
+            income_multiplier_pct in 105u32..181
+        ) {
+            let mut lower_income = sample_inputs();
+            configure_metamorphic_inputs(&mut lower_income);
+            lower_income.seed = seed;
+            lower_income.current_age = current_age;
+            lower_income.max_retirement_age = current_age + retirement_span;
+            lower_income.horizon_age = lower_income.max_retirement_age + horizon_extra + 1;
+            lower_income.pension_access_age =
+                (current_age + 20).min(lower_income.horizon_age - 1);
+            lower_income.simulations = simulations;
+
+            lower_income.isa_start = isa_start as f64;
+            lower_income.taxable_start = taxable_start as f64;
+            lower_income.taxable_cost_basis_start = lower_income.taxable_start;
+            lower_income.pension_start = pension_start as f64;
+            lower_income.target_annual_income = base_income as f64;
+
+            let mean = return_mean_bp as f64 / 10_000.0;
+            let vol = return_vol_bp as f64 / 10_000.0;
+            lower_income.isa_return_mean = mean;
+            lower_income.taxable_return_mean = mean;
+            lower_income.pension_return_mean = mean;
+            lower_income.isa_return_vol = vol;
+            lower_income.taxable_return_vol = vol;
+            lower_income.pension_return_vol = vol;
+
+            let mut higher_income = lower_income.clone();
+            higher_income.target_annual_income =
+                lower_income.target_annual_income * income_multiplier_pct as f64 / 100.0;
+
+            let lower_model = run_model(&lower_income);
+            let higher_model = run_model(&higher_income);
+
+            for (lo, hi) in lower_model.age_results.iter().zip(higher_model.age_results.iter()) {
+                prop_assert!(hi.success_rate <= lo.success_rate + 1e-9);
+            }
+        }
+    }
+
+    #[test]
+    fn zero_volatility_fixed_seed_reruns_are_identical() {
+        let mut inputs = sample_inputs();
+        inputs.seed = 123;
+        inputs.simulations = 40;
+        inputs.current_age = 30;
+        inputs.max_retirement_age = 36;
+        inputs.horizon_age = 45;
+        inputs.pension_access_age = 57;
+
+        inputs.isa_return_vol = 0.0;
+        inputs.taxable_return_vol = 0.0;
+        inputs.pension_return_vol = 0.0;
+        inputs.inflation_vol = 0.0;
+
+        let model_a = run_model(&inputs);
+        let model_b = run_model(&inputs);
+        assert_models_approx_equal(&model_a, &model_b);
+
+        let rows_a = run_yearly_cashflow_trace(&inputs, 36, 36, 36);
+        let rows_b = run_yearly_cashflow_trace(&inputs, 36, 36, 36);
+        assert_eq!(rows_a.len(), rows_b.len());
+        for (a, b) in rows_a.iter().zip(rows_b.iter()) {
+            assert_eq!(a.age, b.age);
+            for (label, left, right) in [
+                (
+                    "median_contribution_isa",
+                    a.median_contribution_isa,
+                    b.median_contribution_isa,
+                ),
+                (
+                    "median_contribution_taxable",
+                    a.median_contribution_taxable,
+                    b.median_contribution_taxable,
+                ),
+                (
+                    "median_contribution_pension",
+                    a.median_contribution_pension,
+                    b.median_contribution_pension,
+                ),
+                (
+                    "median_contribution_total",
+                    a.median_contribution_total,
+                    b.median_contribution_total,
+                ),
+                (
+                    "median_withdrawal_portfolio",
+                    a.median_withdrawal_portfolio,
+                    b.median_withdrawal_portfolio,
+                ),
+                (
+                    "median_withdrawal_non_pension_income",
+                    a.median_withdrawal_non_pension_income,
+                    b.median_withdrawal_non_pension_income,
+                ),
+                (
+                    "median_spending_total",
+                    a.median_spending_total,
+                    b.median_spending_total,
+                ),
+                ("median_tax_cgt", a.median_tax_cgt, b.median_tax_cgt),
+                (
+                    "median_tax_income",
+                    a.median_tax_income,
+                    b.median_tax_income,
+                ),
+                ("median_tax_total", a.median_tax_total, b.median_tax_total),
+                ("median_end_isa", a.median_end_isa, b.median_end_isa),
+                (
+                    "median_end_taxable",
+                    a.median_end_taxable,
+                    b.median_end_taxable,
+                ),
+                (
+                    "median_end_pension",
+                    a.median_end_pension,
+                    b.median_end_pension,
+                ),
+                ("median_end_cash", a.median_end_cash, b.median_end_cash),
+                ("median_end_total", a.median_end_total, b.median_end_total),
+            ] {
+                assert!(
+                    (left - right).abs() <= 1e-9,
+                    "field {label}: expected {left}, got {right}"
+                );
+            }
         }
     }
 
