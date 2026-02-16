@@ -578,7 +578,7 @@ fn build_inputs(cli: Cli) -> Result<Inputs, String> {
 }
 
 pub async fn run_http_server(port: u16) -> std::io::Result<()> {
-    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    let addr = SocketAddr::from(([0, 0, 0, 0], port));
     let app = Router::new()
         .route("/", get(index_handler))
         .route("/index.html", get(index_handler))
@@ -589,7 +589,7 @@ pub async fn run_http_server(port: u16) -> std::io::Result<()> {
 
     let listener = TcpListener::bind(addr).await?;
     println!("FIRE HTTP API listening on http://{addr}");
-    println!("Open http://{addr}/ in your browser.");
+    println!("Local access: http://127.0.0.1:{port}/");
 
     axum::serve(listener, app).await
 }

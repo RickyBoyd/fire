@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: fire-simulator
+    runtime: rust
+    plan: free
+    buildCommand: cargo build --release
+    startCommand: ./target/release/fire serve $PORT
+    healthCheckPath: /
+    autoDeploy: true

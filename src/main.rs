@@ -7,6 +7,7 @@ async fn main() {
         let port = raw_args
             .get(2)
             .and_then(|s| s.parse::<u16>().ok())
+            .or_else(|| env::var("PORT").ok().and_then(|s| s.parse::<u16>().ok()))
             .unwrap_or(8080);
         if let Err(e) = fire::api::run_http_server(port).await {
             eprintln!("Server error: {e}");
