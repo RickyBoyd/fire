@@ -1,18 +1,18 @@
 use axum::{
     Router,
-    extract::Query,
+    extract::{Json, Query},
     http::{StatusCode, header},
     response::{Html, IntoResponse, Response},
     routing::get,
 };
 use clap::{Parser, ValueEnum};
-use std::collections::HashMap;
+use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use tokio::net::TcpListener;
 
 use crate::core::{
-    AgeResult, Inputs, ModelResult, PensionTaxMode, WithdrawalOrder, WithdrawalStrategy,
-    run_coast_model, run_model,
+    AgeResult, CashflowYearResult, Inputs, ModelResult, PensionTaxMode, WithdrawalOrder,
+    WithdrawalStrategy, run_coast_model, run_model, run_yearly_cashflow_trace,
 };
 
 const INDEX_HTML: &str = include_str!("../../web/index.html");
@@ -78,6 +78,192 @@ impl From<CliWithdrawalStrategy> for WithdrawalStrategy {
 enum AnalysisMode {
     RetirementSweep,
     CoastFire,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum ApiWithdrawalOrder {
+    #[serde(alias = "proRata", alias = "pro_rata")]
+    ProRata,
+    #[serde(alias = "isaFirst", alias = "isa_first")]
+    IsaFirst,
+    #[serde(alias = "taxableFirst", alias = "taxable_first")]
+    TaxableFirst,
+    #[serde(alias = "pensionFirst", alias = "pension_first")]
+    PensionFirst,
+}
+
+impl From<ApiWithdrawalOrder> for CliWithdrawalOrder {
+    fn from(value: ApiWithdrawalOrder) -> Self {
+        match value {
+            ApiWithdrawalOrder::ProRata => CliWithdrawalOrder::ProRata,
+            ApiWithdrawalOrder::IsaFirst => CliWithdrawalOrder::IsaFirst,
+            ApiWithdrawalOrder::TaxableFirst => CliWithdrawalOrder::TaxableFirst,
+            ApiWithdrawalOrder::PensionFirst => CliWithdrawalOrder::PensionFirst,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum ApiPensionTaxMode {
+    #[serde(alias = "ukBands", alias = "uk_bands")]
+    UkBands,
+    #[serde(alias = "flat", alias = "flatRate", alias = "flat_rate")]
+    FlatRate,
+}
+
+impl From<ApiPensionTaxMode> for CliPensionTaxMode {
+    fn from(value: ApiPensionTaxMode) -> Self {
+        match value {
+            ApiPensionTaxMode::UkBands => CliPensionTaxMode::UkBands,
+            ApiPensionTaxMode::FlatRate => CliPensionTaxMode::FlatRate,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum ApiWithdrawalStrategy {
+    #[serde(alias = "dynamic-guardrails", alias = "dynamicGuardrails")]
+    Guardrails,
+    #[serde(alias = "guytonKlinger", alias = "guyton_klinger")]
+    GuytonKlinger,
+    Vpw,
+    #[serde(alias = "floorUpside", alias = "floor_upside")]
+    FloorUpside,
+    Bucket,
+}
+
+impl From<ApiWithdrawalStrategy> for CliWithdrawalStrategy {
+    fn from(value: ApiWithdrawalStrategy) -> Self {
+        match value {
+            ApiWithdrawalStrategy::Guardrails => CliWithdrawalStrategy::Guardrails,
+            ApiWithdrawalStrategy::GuytonKlinger => CliWithdrawalStrategy::GuytonKlinger,
+            ApiWithdrawalStrategy::Vpw => CliWithdrawalStrategy::Vpw,
+            ApiWithdrawalStrategy::FloorUpside => CliWithdrawalStrategy::FloorUpside,
+            ApiWithdrawalStrategy::Bucket => CliWithdrawalStrategy::Bucket,
+        }
+    }
+}
+
+impl From<WithdrawalStrategy> for ApiWithdrawalStrategy {
+    fn from(value: WithdrawalStrategy) -> Self {
+        match value {
+            WithdrawalStrategy::Guardrails => ApiWithdrawalStrategy::Guardrails,
+            WithdrawalStrategy::GuytonKlinger => ApiWithdrawalStrategy::GuytonKlinger,
+            WithdrawalStrategy::Vpw => ApiWithdrawalStrategy::Vpw,
+            WithdrawalStrategy::FloorUpside => ApiWithdrawalStrategy::FloorUpside,
+            WithdrawalStrategy::Bucket => ApiWithdrawalStrategy::Bucket,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum ApiAnalysisMode {
+    #[serde(alias = "retirementSweep", alias = "retirement")]
+    RetirementSweep,
+    #[serde(alias = "coastFire", alias = "coast")]
+    CoastFire,
+}
+
+impl From<ApiAnalysisMode> for AnalysisMode {
+    fn from(value: ApiAnalysisMode) -> Self {
+        match value {
+            ApiAnalysisMode::RetirementSweep => AnalysisMode::RetirementSweep,
+            ApiAnalysisMode::CoastFire => AnalysisMode::CoastFire,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum ResponseMode {
+    Retirement,
+    Coast,
+}
+
+impl From<AnalysisMode> for ResponseMode {
+    fn from(value: AnalysisMode) -> Self {
+        match value {
+            AnalysisMode::RetirementSweep => ResponseMode::Retirement,
+            AnalysisMode::CoastFire => ResponseMode::Coast,
+        }
+    }
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+struct SimulatePayload {
+    current_age: Option<u32>,
+    pension_access_age: Option<u32>,
+    max_age: Option<u32>,
+    horizon_age: Option<u32>,
+    simulations: Option<u32>,
+    seed: Option<u64>,
+
+    isa_start: Option<f64>,
+    taxable_start: Option<f64>,
+    taxable_basis_start: Option<f64>,
+    pension_start: Option<f64>,
+    cash_start: Option<f64>,
+
+    isa_contribution: Option<f64>,
+    isa_limit: Option<f64>,
+    taxable_contribution: Option<f64>,
+    pension_contribution: Option<f64>,
+    contribution_growth: Option<f64>,
+
+    cgt_rate: Option<f64>,
+    cgt_allowance: Option<f64>,
+    taxable_tax_drag: Option<f64>,
+
+    pension_tax_mode: Option<ApiPensionTaxMode>,
+    pension_income_tax_rate: Option<f64>,
+    uk_personal_allowance: Option<f64>,
+    uk_basic_rate_limit: Option<f64>,
+    uk_higher_rate_limit: Option<f64>,
+    uk_basic_rate: Option<f64>,
+    uk_higher_rate: Option<f64>,
+    uk_additional_rate: Option<f64>,
+    uk_allowance_taper_start: Option<f64>,
+    uk_allowance_taper_end: Option<f64>,
+    state_pension_start_age: Option<u32>,
+    state_pension_income: Option<f64>,
+
+    isa_mean: Option<f64>,
+    isa_vol: Option<f64>,
+    taxable_mean: Option<f64>,
+    taxable_vol: Option<f64>,
+    pension_mean: Option<f64>,
+    pension_vol: Option<f64>,
+    correlation: Option<f64>,
+    inflation_mean: Option<f64>,
+    inflation_vol: Option<f64>,
+
+    target_income: Option<f64>,
+    mortgage_annual_payment: Option<f64>,
+    mortgage_end_age: Option<u32>,
+    success_threshold: Option<f64>,
+    bad_threshold: Option<f64>,
+    good_threshold: Option<f64>,
+    bad_cut: Option<f64>,
+    good_raise: Option<f64>,
+    min_floor: Option<f64>,
+    max_ceiling: Option<f64>,
+    withdrawal_policy: Option<ApiWithdrawalStrategy>,
+    gk_lower_guardrail: Option<f64>,
+    gk_upper_guardrail: Option<f64>,
+    vpw_real_return: Option<f64>,
+    floor_upside_capture: Option<f64>,
+    bucket_years_target: Option<f64>,
+    extra_to_cash: Option<f64>,
+    cash_growth: Option<f64>,
+    withdrawal_order: Option<ApiWithdrawalOrder>,
+
+    analysis_mode: Option<ApiAnalysisMode>,
+    coast_retirement_age: Option<u32>,
 }
 
 #[derive(Parser, Debug)]
@@ -361,6 +547,35 @@ struct ApiRequest {
     options: ApiOptions,
 }
 
+#[derive(Copy, Clone)]
+struct CashflowResponse<'a> {
+    candidate_age: u32,
+    retirement_age: u32,
+    contribution_stop_age: u32,
+    years: &'a [CashflowYearResult],
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SimulateResponse {
+    mode: ResponseMode,
+    withdrawal_policy: ApiWithdrawalStrategy,
+    coast_retirement_age: Option<u32>,
+    success_threshold: f64,
+    selected_retirement_age: Option<u32>,
+    best_retirement_age: u32,
+    cashflow_candidate_age: u32,
+    cashflow_retirement_age: u32,
+    cashflow_contribution_stop_age: u32,
+    age_results: Vec<AgeResult>,
+    cashflow_years: Vec<CashflowYearResult>,
+}
+
+#[derive(Debug, Serialize)]
+struct ErrorResponse {
+    error: String,
+}
+
 fn build_inputs(cli: Cli) -> Result<Inputs, String> {
     if cli.pension_access_age < cli.current_age {
         return Err("--pension-access-age must be >= --current-age".to_string());
@@ -584,7 +799,10 @@ pub async fn run_http_server(port: u16) -> std::io::Result<()> {
         .route("/index.html", get(index_handler))
         .route("/styles.css", get(styles_handler))
         .route("/app.js", get(app_js_handler))
-        .route("/api/simulate", get(simulate_handler))
+        .route(
+            "/api/simulate",
+            get(simulate_get_handler).post(simulate_post_handler),
+        )
         .fallback(not_found_handler);
 
     let listener = TcpListener::bind(addr).await?;
@@ -616,21 +834,21 @@ async fn app_js_handler() -> impl IntoResponse {
 }
 
 async fn not_found_handler() -> Response {
-    json_response(
-        StatusCode::NOT_FOUND,
-        "{\"error\":\"Not found\"}".to_string(),
-    )
+    error_response(StatusCode::NOT_FOUND, "Not found")
 }
 
-async fn simulate_handler(Query(params): Query<HashMap<String, String>>) -> Response {
-    let request = match api_request_from_params(params) {
+async fn simulate_get_handler(Query(payload): Query<SimulatePayload>) -> Response {
+    simulate_handler_impl(payload).await
+}
+
+async fn simulate_post_handler(Json(payload): Json<SimulatePayload>) -> Response {
+    simulate_handler_impl(payload).await
+}
+
+async fn simulate_handler_impl(payload: SimulatePayload) -> Response {
+    let request = match api_request_from_payload(payload) {
         Ok(request) => request,
-        Err(msg) => {
-            return json_response(
-                StatusCode::BAD_REQUEST,
-                format!("{{\"error\":\"{}\"}}", json_escape(&msg)),
-            );
-        }
+        Err(msg) => return error_response(StatusCode::BAD_REQUEST, &msg),
     };
 
     let inputs = &request.inputs;
@@ -651,13 +869,36 @@ async fn simulate_handler(Query(params): Query<HashMap<String, String>>) -> Resp
         }
     };
 
-    let json = model_to_json(
+    let trace_index = model.selected_index.unwrap_or(model.best_index);
+    let trace_reported_age = model.age_results[trace_index].retirement_age;
+    let (trace_retirement_age, trace_contribution_stop_age) = match request.options.mode {
+        AnalysisMode::RetirementSweep => (trace_reported_age, trace_reported_age),
+        AnalysisMode::CoastFire => (
+            resolved_coast_retirement_age.unwrap_or(trace_reported_age),
+            trace_reported_age,
+        ),
+    };
+    let cashflow_years = run_yearly_cashflow_trace(
+        inputs,
+        trace_retirement_age,
+        trace_contribution_stop_age,
+        trace_reported_age,
+    );
+    let cashflow = CashflowResponse {
+        candidate_age: trace_reported_age,
+        retirement_age: trace_retirement_age,
+        contribution_stop_age: trace_contribution_stop_age,
+        years: &cashflow_years,
+    };
+
+    let response = build_simulate_response(
         inputs,
         &model,
         request.options.mode,
         resolved_coast_retirement_age,
+        cashflow,
     );
-    json_response(StatusCode::OK, json)
+    json_response(StatusCode::OK, response)
 }
 
 fn with_cache_control<R: IntoResponse>(response: R) -> Response {
@@ -669,122 +910,227 @@ fn with_cache_control<R: IntoResponse>(response: R) -> Response {
     response
 }
 
-fn json_response(status: StatusCode, body: String) -> Response {
-    (
+fn json_response<T: Serialize>(status: StatusCode, body: T) -> Response {
+    let mut response = (status, Json(body)).into_response();
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        "no-store".parse().expect("valid header"),
+    );
+    response
+}
+
+fn error_response(status: StatusCode, msg: &str) -> Response {
+    json_response(
         status,
-        [
-            (header::CONTENT_TYPE, "application/json; charset=utf-8"),
-            (header::CACHE_CONTROL, "no-store"),
-        ],
-        body,
+        ErrorResponse {
+            error: msg.to_string(),
+        },
     )
-        .into_response()
 }
 
 #[cfg(test)]
-fn api_request_from_query(query: &str) -> Result<ApiRequest, String> {
-    api_request_from_params(parse_query(query))
+fn api_request_from_json(json: &str) -> Result<ApiRequest, String> {
+    let payload = serde_json::from_str::<SimulatePayload>(json)
+        .map_err(|e| format!("Invalid API JSON payload: {e}"))?;
+    api_request_from_payload(payload)
 }
 
-fn api_request_from_params(params: HashMap<String, String>) -> Result<ApiRequest, String> {
+fn api_request_from_payload(payload: SimulatePayload) -> Result<ApiRequest, String> {
     let mut cli = default_cli_for_api();
     let mut options = ApiOptions {
         mode: AnalysisMode::RetirementSweep,
         coast_retirement_age: None,
     };
 
-    for (key, value) in params {
-        match key.as_str() {
-            "currentAge" => cli.current_age = parse_u32_value(&key, &value)?,
-            "pensionAccessAge" => cli.pension_access_age = parse_u32_value(&key, &value)?,
-            "maxAge" => cli.max_age = parse_u32_value(&key, &value)?,
-            "horizonAge" => cli.horizon_age = parse_u32_value(&key, &value)?,
-            "simulations" => cli.simulations = parse_u32_value(&key, &value)?,
-            "seed" => cli.seed = parse_u64_value(&key, &value)?,
-
-            "isaStart" => cli.isa_start = parse_f64_value(&key, &value)?,
-            "taxableStart" => cli.taxable_start = parse_f64_value(&key, &value)?,
-            "taxableBasisStart" => cli.taxable_cost_basis_start = parse_f64_value(&key, &value)?,
-            "pensionStart" => cli.pension_start = parse_f64_value(&key, &value)?,
-            "cashStart" => cli.cash_start = parse_f64_value(&key, &value)?,
-
-            "isaContribution" => cli.isa_annual_contribution = parse_f64_value(&key, &value)?,
-            "isaLimit" => cli.isa_annual_contribution_limit = parse_f64_value(&key, &value)?,
-            "taxableContribution" => {
-                cli.taxable_annual_contribution = parse_f64_value(&key, &value)?
-            }
-            "pensionContribution" => {
-                cli.pension_annual_contribution = parse_f64_value(&key, &value)?
-            }
-            "contributionGrowth" => cli.contribution_growth_rate = parse_f64_value(&key, &value)?,
-
-            "cgtRate" => cli.capital_gains_tax_rate = parse_f64_value(&key, &value)?,
-            "cgtAllowance" => cli.capital_gains_allowance = parse_f64_value(&key, &value)?,
-            "taxableTaxDrag" => cli.taxable_return_tax_drag = parse_f64_value(&key, &value)?,
-
-            "pensionTaxMode" => cli.pension_tax_mode = parse_pension_tax_mode(&value)?,
-            "pensionIncomeTaxRate" => cli.pension_income_tax_rate = parse_f64_value(&key, &value)?,
-            "ukPersonalAllowance" => cli.uk_personal_allowance = parse_f64_value(&key, &value)?,
-            "ukBasicRateLimit" => cli.uk_basic_rate_limit = parse_f64_value(&key, &value)?,
-            "ukHigherRateLimit" => cli.uk_higher_rate_limit = parse_f64_value(&key, &value)?,
-            "ukBasicRate" => cli.uk_basic_rate = parse_f64_value(&key, &value)?,
-            "ukHigherRate" => cli.uk_higher_rate = parse_f64_value(&key, &value)?,
-            "ukAdditionalRate" => cli.uk_additional_rate = parse_f64_value(&key, &value)?,
-            "ukAllowanceTaperStart" => {
-                cli.uk_allowance_taper_start = parse_f64_value(&key, &value)?
-            }
-            "ukAllowanceTaperEnd" => cli.uk_allowance_taper_end = parse_f64_value(&key, &value)?,
-            "statePensionStartAge" => cli.state_pension_start_age = parse_u32_value(&key, &value)?,
-            "statePensionIncome" => {
-                cli.state_pension_annual_income = parse_f64_value(&key, &value)?
-            }
-
-            "isaMean" => cli.isa_growth_rate = parse_f64_value(&key, &value)?,
-            "isaVol" => cli.isa_return_volatility = parse_f64_value(&key, &value)?,
-            "taxableMean" => cli.taxable_growth_rate = Some(parse_f64_value(&key, &value)?),
-            "taxableVol" => cli.taxable_return_volatility = Some(parse_f64_value(&key, &value)?),
-            "pensionMean" => cli.pension_growth_rate = parse_f64_value(&key, &value)?,
-            "pensionVol" => cli.pension_return_volatility = parse_f64_value(&key, &value)?,
-            "correlation" => cli.return_correlation = parse_f64_value(&key, &value)?,
-            "inflationMean" => cli.inflation_rate = parse_f64_value(&key, &value)?,
-            "inflationVol" => cli.inflation_volatility = parse_f64_value(&key, &value)?,
-
-            "targetIncome" => cli.target_annual_income = parse_f64_value(&key, &value)?,
-            "mortgageAnnualPayment" => cli.mortgage_annual_payment = parse_f64_value(&key, &value)?,
-            "mortgageEndAge" => {
-                if !value.trim().is_empty() {
-                    cli.mortgage_end_age = Some(parse_u32_value(&key, &value)?);
-                }
-            }
-            "successThreshold" => cli.success_threshold = parse_f64_value(&key, &value)?,
-            "badThreshold" => cli.bad_year_threshold = parse_f64_value(&key, &value)?,
-            "goodThreshold" => cli.good_year_threshold = parse_f64_value(&key, &value)?,
-            "badCut" => cli.bad_year_cut = parse_f64_value(&key, &value)?,
-            "goodRaise" => cli.good_year_raise = parse_f64_value(&key, &value)?,
-            "minFloor" => cli.min_income_floor = parse_f64_value(&key, &value)?,
-            "maxCeiling" => cli.max_income_ceiling = parse_f64_value(&key, &value)?,
-            "withdrawalPolicy" => cli.withdrawal_strategy = parse_withdrawal_strategy(&value)?,
-            "gkLowerGuardrail" => cli.gk_lower_guardrail = parse_f64_value(&key, &value)?,
-            "gkUpperGuardrail" => cli.gk_upper_guardrail = parse_f64_value(&key, &value)?,
-            "vpwRealReturn" => cli.vpw_expected_real_return = parse_f64_value(&key, &value)?,
-            "floorUpsideCapture" => cli.floor_upside_capture = parse_f64_value(&key, &value)?,
-            "bucketYearsTarget" => cli.bucket_target_years = parse_f64_value(&key, &value)?,
-            "extraToCash" => cli.good_year_extra_buffer_withdrawal = parse_f64_value(&key, &value)?,
-            "cashGrowth" => cli.cash_growth_rate = parse_f64_value(&key, &value)?,
-            "withdrawalOrder" => cli.post_access_withdrawal_order = parse_withdrawal_order(&value)?,
-
-            "analysisMode" => options.mode = parse_analysis_mode(&value)?,
-            "coastRetirementAge" => {
-                if !value.trim().is_empty() {
-                    options.coast_retirement_age = Some(parse_u32_value(&key, &value)?);
-                }
-            }
-            _ => {}
-        }
+    if let Some(v) = payload.current_age {
+        cli.current_age = v;
+    }
+    if let Some(v) = payload.pension_access_age {
+        cli.pension_access_age = v;
+    }
+    if let Some(v) = payload.max_age {
+        cli.max_age = v;
+    }
+    if let Some(v) = payload.horizon_age {
+        cli.horizon_age = v;
+    }
+    if let Some(v) = payload.simulations {
+        cli.simulations = v;
+    }
+    if let Some(v) = payload.seed {
+        cli.seed = v;
     }
 
-    if cli.taxable_cost_basis_start == 0.0 && cli.taxable_start > 0.0 {
-        cli.taxable_cost_basis_start = cli.taxable_start;
+    if let Some(v) = payload.isa_start {
+        cli.isa_start = v;
+    }
+    if let Some(v) = payload.taxable_start {
+        cli.taxable_start = v;
+    }
+    if let Some(v) = payload.taxable_basis_start {
+        cli.taxable_cost_basis_start = v;
+    }
+    if let Some(v) = payload.pension_start {
+        cli.pension_start = v;
+    }
+    if let Some(v) = payload.cash_start {
+        cli.cash_start = v;
+    }
+
+    if let Some(v) = payload.isa_contribution {
+        cli.isa_annual_contribution = v;
+    }
+    if let Some(v) = payload.isa_limit {
+        cli.isa_annual_contribution_limit = v;
+    }
+    if let Some(v) = payload.taxable_contribution {
+        cli.taxable_annual_contribution = v;
+    }
+    if let Some(v) = payload.pension_contribution {
+        cli.pension_annual_contribution = v;
+    }
+    if let Some(v) = payload.contribution_growth {
+        cli.contribution_growth_rate = v;
+    }
+
+    if let Some(v) = payload.cgt_rate {
+        cli.capital_gains_tax_rate = v;
+    }
+    if let Some(v) = payload.cgt_allowance {
+        cli.capital_gains_allowance = v;
+    }
+    if let Some(v) = payload.taxable_tax_drag {
+        cli.taxable_return_tax_drag = v;
+    }
+
+    if let Some(v) = payload.pension_tax_mode {
+        cli.pension_tax_mode = v.into();
+    }
+    if let Some(v) = payload.pension_income_tax_rate {
+        cli.pension_income_tax_rate = v;
+    }
+    if let Some(v) = payload.uk_personal_allowance {
+        cli.uk_personal_allowance = v;
+    }
+    if let Some(v) = payload.uk_basic_rate_limit {
+        cli.uk_basic_rate_limit = v;
+    }
+    if let Some(v) = payload.uk_higher_rate_limit {
+        cli.uk_higher_rate_limit = v;
+    }
+    if let Some(v) = payload.uk_basic_rate {
+        cli.uk_basic_rate = v;
+    }
+    if let Some(v) = payload.uk_higher_rate {
+        cli.uk_higher_rate = v;
+    }
+    if let Some(v) = payload.uk_additional_rate {
+        cli.uk_additional_rate = v;
+    }
+    if let Some(v) = payload.uk_allowance_taper_start {
+        cli.uk_allowance_taper_start = v;
+    }
+    if let Some(v) = payload.uk_allowance_taper_end {
+        cli.uk_allowance_taper_end = v;
+    }
+    if let Some(v) = payload.state_pension_start_age {
+        cli.state_pension_start_age = v;
+    }
+    if let Some(v) = payload.state_pension_income {
+        cli.state_pension_annual_income = v;
+    }
+
+    if let Some(v) = payload.isa_mean {
+        cli.isa_growth_rate = v;
+    }
+    if let Some(v) = payload.isa_vol {
+        cli.isa_return_volatility = v;
+    }
+    if let Some(v) = payload.taxable_mean {
+        cli.taxable_growth_rate = Some(v);
+    }
+    if let Some(v) = payload.taxable_vol {
+        cli.taxable_return_volatility = Some(v);
+    }
+    if let Some(v) = payload.pension_mean {
+        cli.pension_growth_rate = v;
+    }
+    if let Some(v) = payload.pension_vol {
+        cli.pension_return_volatility = v;
+    }
+    if let Some(v) = payload.correlation {
+        cli.return_correlation = v;
+    }
+    if let Some(v) = payload.inflation_mean {
+        cli.inflation_rate = v;
+    }
+    if let Some(v) = payload.inflation_vol {
+        cli.inflation_volatility = v;
+    }
+
+    if let Some(v) = payload.target_income {
+        cli.target_annual_income = v;
+    }
+    if let Some(v) = payload.mortgage_annual_payment {
+        cli.mortgage_annual_payment = v;
+    }
+    if let Some(v) = payload.mortgage_end_age {
+        cli.mortgage_end_age = Some(v);
+    }
+    if let Some(v) = payload.success_threshold {
+        cli.success_threshold = v;
+    }
+    if let Some(v) = payload.bad_threshold {
+        cli.bad_year_threshold = v;
+    }
+    if let Some(v) = payload.good_threshold {
+        cli.good_year_threshold = v;
+    }
+    if let Some(v) = payload.bad_cut {
+        cli.bad_year_cut = v;
+    }
+    if let Some(v) = payload.good_raise {
+        cli.good_year_raise = v;
+    }
+    if let Some(v) = payload.min_floor {
+        cli.min_income_floor = v;
+    }
+    if let Some(v) = payload.max_ceiling {
+        cli.max_income_ceiling = v;
+    }
+    if let Some(v) = payload.withdrawal_policy {
+        cli.withdrawal_strategy = v.into();
+    }
+    if let Some(v) = payload.gk_lower_guardrail {
+        cli.gk_lower_guardrail = v;
+    }
+    if let Some(v) = payload.gk_upper_guardrail {
+        cli.gk_upper_guardrail = v;
+    }
+    if let Some(v) = payload.vpw_real_return {
+        cli.vpw_expected_real_return = v;
+    }
+    if let Some(v) = payload.floor_upside_capture {
+        cli.floor_upside_capture = v;
+    }
+    if let Some(v) = payload.bucket_years_target {
+        cli.bucket_target_years = v;
+    }
+    if let Some(v) = payload.extra_to_cash {
+        cli.good_year_extra_buffer_withdrawal = v;
+    }
+    if let Some(v) = payload.cash_growth {
+        cli.cash_growth_rate = v;
+    }
+    if let Some(v) = payload.withdrawal_order {
+        cli.post_access_withdrawal_order = v.into();
+    }
+
+    if let Some(v) = payload.analysis_mode {
+        options.mode = v.into();
+    }
+    if let Some(v) = payload.coast_retirement_age {
+        options.coast_retirement_age = Some(v);
     }
 
     let inputs = build_inputs(cli)?;
@@ -864,197 +1210,28 @@ fn default_cli_for_api() -> Cli {
     }
 }
 
-fn parse_withdrawal_order(value: &str) -> Result<CliWithdrawalOrder, String> {
-    match value {
-        "pro-rata" | "proRata" | "pro_rata" => Ok(CliWithdrawalOrder::ProRata),
-        "isa-first" | "isaFirst" | "isa_first" => Ok(CliWithdrawalOrder::IsaFirst),
-        "taxable-first" | "taxableFirst" | "taxable_first" => Ok(CliWithdrawalOrder::TaxableFirst),
-        "pension-first" | "pensionFirst" | "pension_first" => Ok(CliWithdrawalOrder::PensionFirst),
-        _ => Err(format!("Invalid withdrawalOrder: {value}")),
-    }
-}
-
-fn parse_withdrawal_strategy(value: &str) -> Result<CliWithdrawalStrategy, String> {
-    match value {
-        "guardrails" | "dynamic-guardrails" | "dynamicGuardrails" => {
-            Ok(CliWithdrawalStrategy::Guardrails)
-        }
-        "guyton-klinger" | "guytonKlinger" | "guyton_klinger" => {
-            Ok(CliWithdrawalStrategy::GuytonKlinger)
-        }
-        "vpw" => Ok(CliWithdrawalStrategy::Vpw),
-        "floor-upside" | "floorUpside" | "floor_upside" => Ok(CliWithdrawalStrategy::FloorUpside),
-        "bucket" => Ok(CliWithdrawalStrategy::Bucket),
-        _ => Err(format!("Invalid withdrawalPolicy: {value}")),
-    }
-}
-
-fn parse_pension_tax_mode(value: &str) -> Result<CliPensionTaxMode, String> {
-    match value {
-        "uk-bands" | "ukBands" | "uk_bands" => Ok(CliPensionTaxMode::UkBands),
-        "flat" | "flat-rate" | "flatRate" | "flat_rate" => Ok(CliPensionTaxMode::FlatRate),
-        _ => Err(format!("Invalid pensionTaxMode: {value}")),
-    }
-}
-
-fn parse_analysis_mode(value: &str) -> Result<AnalysisMode, String> {
-    match value {
-        "retirement-sweep" | "retirementSweep" | "retirement" => Ok(AnalysisMode::RetirementSweep),
-        "coast-fire" | "coastFire" | "coast" => Ok(AnalysisMode::CoastFire),
-        _ => Err(format!("Invalid analysisMode: {value}")),
-    }
-}
-
-#[cfg(test)]
-fn parse_query(query: &str) -> HashMap<String, String> {
-    let mut map = HashMap::new();
-    for pair in query.split('&') {
-        if pair.is_empty() {
-            continue;
-        }
-        let (raw_key, raw_val) = pair.split_once('=').unwrap_or((pair, ""));
-        let key = url_decode(raw_key);
-        let val = url_decode(raw_val);
-        map.insert(key, val);
-    }
-    map
-}
-
-#[cfg(test)]
-fn url_decode(input: &str) -> String {
-    let bytes = input.as_bytes();
-    let mut out = String::with_capacity(input.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'+' => {
-                out.push(' ');
-                i += 1;
-            }
-            b'%' if i + 2 < bytes.len() => {
-                let hex = &input[i + 1..i + 3];
-                if let Ok(v) = u8::from_str_radix(hex, 16) {
-                    out.push(v as char);
-                    i += 3;
-                } else {
-                    out.push('%');
-                    i += 1;
-                }
-            }
-            b => {
-                out.push(b as char);
-                i += 1;
-            }
-        }
-    }
-    out
-}
-
-fn parse_f64_value(name: &str, value: &str) -> Result<f64, String> {
-    value
-        .parse::<f64>()
-        .map_err(|_| format!("Invalid numeric value for {name}"))
-}
-
-fn parse_u32_value(name: &str, value: &str) -> Result<u32, String> {
-    value
-        .parse::<u32>()
-        .map_err(|_| format!("Invalid integer value for {name}"))
-}
-
-fn parse_u64_value(name: &str, value: &str) -> Result<u64, String> {
-    value
-        .parse::<u64>()
-        .map_err(|_| format!("Invalid integer value for {name}"))
-}
-
-fn model_to_json(
+fn build_simulate_response(
     inputs: &Inputs,
     model: &ModelResult,
     mode: AnalysisMode,
     coast_retirement_age: Option<u32>,
-) -> String {
-    let selected = model
-        .selected_index
-        .map(|idx| model.age_results[idx].retirement_age.to_string())
-        .unwrap_or_else(|| "null".to_string());
-    let best_age = model.age_results[model.best_index].retirement_age;
-    let mode_str = match mode {
-        AnalysisMode::RetirementSweep => "retirement",
-        AnalysisMode::CoastFire => "coast",
-    };
-    let withdrawal_policy_str = match inputs.withdrawal_strategy {
-        WithdrawalStrategy::Guardrails => "guardrails",
-        WithdrawalStrategy::GuytonKlinger => "guyton-klinger",
-        WithdrawalStrategy::Vpw => "vpw",
-        WithdrawalStrategy::FloorUpside => "floor-upside",
-        WithdrawalStrategy::Bucket => "bucket",
-    };
-    let coast_retirement_age_json = coast_retirement_age
-        .map(|age| age.to_string())
-        .unwrap_or_else(|| "null".to_string());
-    let age_results = model
-        .age_results
-        .iter()
-        .map(age_result_to_json)
-        .collect::<Vec<_>>()
-        .join(",");
-
-    format!(
-        "{{\"mode\":\"{}\",\"withdrawalPolicy\":\"{}\",\"coastRetirementAge\":{},\"successThreshold\":{},\"selectedRetirementAge\":{},\"bestRetirementAge\":{},\"ageResults\":[{}]}}",
-        mode_str,
-        withdrawal_policy_str,
-        coast_retirement_age_json,
-        json_f64(inputs.success_threshold),
-        selected,
-        best_age,
-        age_results
-    )
-}
-
-fn age_result_to_json(r: &AgeResult) -> String {
-    format!(
-        "{{\"retirementAge\":{},\"successRate\":{},\"medianRetirementPot\":{},\"p10RetirementPot\":{},\"medianRetirementIsa\":{},\"p10RetirementIsa\":{},\"medianRetirementTaxable\":{},\"p10RetirementTaxable\":{},\"medianRetirementPension\":{},\"p10RetirementPension\":{},\"medianRetirementCash\":{},\"p10RetirementCash\":{},\"medianTerminalPot\":{},\"p10TerminalPot\":{},\"medianTerminalIsa\":{},\"p10TerminalIsa\":{},\"medianTerminalTaxable\":{},\"p10TerminalTaxable\":{},\"medianTerminalPension\":{},\"p10TerminalPension\":{},\"medianTerminalCash\":{},\"p10TerminalCash\":{},\"p10MinIncomeRatio\":{},\"medianAvgIncomeRatio\":{}}}",
-        r.retirement_age,
-        json_f64(r.success_rate),
-        json_f64(r.median_retirement_pot),
-        json_f64(r.p10_retirement_pot),
-        json_f64(r.median_retirement_isa),
-        json_f64(r.p10_retirement_isa),
-        json_f64(r.median_retirement_taxable),
-        json_f64(r.p10_retirement_taxable),
-        json_f64(r.median_retirement_pension),
-        json_f64(r.p10_retirement_pension),
-        json_f64(r.median_retirement_cash),
-        json_f64(r.p10_retirement_cash),
-        json_f64(r.median_terminal_pot),
-        json_f64(r.p10_terminal_pot),
-        json_f64(r.median_terminal_isa),
-        json_f64(r.p10_terminal_isa),
-        json_f64(r.median_terminal_taxable),
-        json_f64(r.p10_terminal_taxable),
-        json_f64(r.median_terminal_pension),
-        json_f64(r.p10_terminal_pension),
-        json_f64(r.median_terminal_cash),
-        json_f64(r.p10_terminal_cash),
-        json_f64(r.p10_min_income_ratio),
-        json_f64(r.median_avg_income_ratio)
-    )
-}
-
-fn json_f64(v: f64) -> String {
-    if v.is_finite() {
-        format!("{v:.10}")
-    } else {
-        "0.0".to_string()
+    cashflow: CashflowResponse<'_>,
+) -> SimulateResponse {
+    SimulateResponse {
+        mode: mode.into(),
+        withdrawal_policy: inputs.withdrawal_strategy.into(),
+        coast_retirement_age,
+        success_threshold: inputs.success_threshold,
+        selected_retirement_age: model
+            .selected_index
+            .map(|idx| model.age_results[idx].retirement_age),
+        best_retirement_age: model.age_results[model.best_index].retirement_age,
+        cashflow_candidate_age: cashflow.candidate_age,
+        cashflow_retirement_age: cashflow.retirement_age,
+        cashflow_contribution_stop_age: cashflow.contribution_stop_age,
+        age_results: model.age_results.clone(),
+        cashflow_years: cashflow.years.to_vec(),
     }
-}
-
-fn json_escape(input: &str) -> String {
-    input
-        .replace('\\', "\\\\")
-        .replace('"', "\\\"")
-        .replace('\n', "\\n")
 }
 
 #[cfg(test)]
@@ -1150,9 +1327,28 @@ mod tests {
     }
 
     #[test]
-    fn api_request_from_query_parses_web_keys() {
-        let query = "currentAge=31&pensionAccessAge=58&isaStart=120000&taxableStart=20000&taxableBasisStart=15000&pensionStart=250000&cashStart=5000&targetIncome=45000&mortgageAnnualPayment=12000&mortgageEndAge=40&withdrawalOrder=taxable-first&simulations=1234&contributionGrowth=3&pensionTaxMode=uk-bands&statePensionStartAge=67&statePensionIncome=12000&withdrawalPolicy=vpw&vpwRealReturn=4.2";
-        let request = api_request_from_query(query).expect("query should parse");
+    fn api_request_from_json_parses_web_keys() {
+        let json = r#"{
+          "currentAge": 31,
+          "pensionAccessAge": 58,
+          "isaStart": 120000,
+          "taxableStart": 20000,
+          "taxableBasisStart": 15000,
+          "pensionStart": 250000,
+          "cashStart": 5000,
+          "targetIncome": 45000,
+          "mortgageAnnualPayment": 12000,
+          "mortgageEndAge": 40,
+          "withdrawalOrder": "taxable-first",
+          "simulations": 1234,
+          "contributionGrowth": 3,
+          "pensionTaxMode": "uk-bands",
+          "statePensionStartAge": 67,
+          "statePensionIncome": 12000,
+          "withdrawalPolicy": "vpw",
+          "vpwRealReturn": 4.2
+        }"#;
+        let request = api_request_from_json(json).expect("json should parse");
         let inputs = request.inputs;
 
         assert_eq!(inputs.current_age, 31);
@@ -1189,9 +1385,14 @@ mod tests {
     }
 
     #[test]
-    fn api_request_from_query_parses_coast_mode_and_retirement_age() {
-        let query = "analysisMode=coast-fire&coastRetirementAge=60&currentAge=31&horizonAge=90";
-        let request = api_request_from_query(query).expect("query should parse");
+    fn api_request_from_json_parses_coast_mode_and_retirement_age() {
+        let json = r#"{
+          "analysisMode": "coast-fire",
+          "coastRetirementAge": 60,
+          "currentAge": 31,
+          "horizonAge": 90
+        }"#;
+        let request = api_request_from_json(json).expect("json should parse");
         assert_eq!(request.options.mode, AnalysisMode::CoastFire);
         assert_eq!(request.options.coast_retirement_age, Some(60));
         assert_eq!(request.inputs.current_age, 31);
@@ -1208,7 +1409,7 @@ mod tests {
     }
 
     #[test]
-    fn model_to_json_contains_expected_fields() {
+    fn simulate_response_serialization_contains_expected_fields() {
         let mut cli = sample_cli();
         cli.current_age = 30;
         cli.max_age = 30;
@@ -1222,8 +1423,30 @@ mod tests {
 
         let inputs = build_inputs(cli).expect("valid inputs");
         let model = run_model(&inputs);
-        let json = model_to_json(&inputs, &model, AnalysisMode::RetirementSweep, None);
+        let trace_index = model.selected_index.unwrap_or(model.best_index);
+        let trace_candidate_age = model.age_results[trace_index].retirement_age;
+        let cashflow = run_yearly_cashflow_trace(
+            &inputs,
+            trace_candidate_age,
+            trace_candidate_age,
+            trace_candidate_age,
+        );
+        let cashflow_response = CashflowResponse {
+            candidate_age: trace_candidate_age,
+            retirement_age: trace_candidate_age,
+            contribution_stop_age: trace_candidate_age,
+            years: &cashflow,
+        };
+        let response = build_simulate_response(
+            &inputs,
+            &model,
+            AnalysisMode::RetirementSweep,
+            None,
+            cashflow_response,
+        );
+        let json = serde_json::to_string(&response).expect("response should serialize");
         assert!(json.contains("\"ageResults\""));
+        assert!(json.contains("\"cashflowYears\""));
         assert!(json.contains("\"mode\""));
         assert!(json.contains("\"withdrawalPolicy\""));
         assert!(json.contains("\"selectedRetirementAge\""));
@@ -1246,9 +1469,30 @@ mod tests {
 
         let inputs = build_inputs(cli).expect("valid inputs");
         let model = run_model(&inputs);
+        let trace_index = model.selected_index.unwrap_or(model.best_index);
+        let trace_candidate_age = model.age_results[trace_index].retirement_age;
+        let cashflow = run_yearly_cashflow_trace(
+            &inputs,
+            trace_candidate_age,
+            trace_candidate_age,
+            trace_candidate_age,
+        );
+        let cashflow_response = CashflowResponse {
+            candidate_age: trace_candidate_age,
+            retirement_age: trace_candidate_age,
+            contribution_stop_age: trace_candidate_age,
+            years: &cashflow,
+        };
+        let response = build_simulate_response(
+            &inputs,
+            &model,
+            AnalysisMode::RetirementSweep,
+            None,
+            cashflow_response,
+        );
         let json = format!(
             "{}\n",
-            model_to_json(&inputs, &model, AnalysisMode::RetirementSweep, None)
+            serde_json::to_string(&response).expect("response should serialize")
         );
 
         assert_golden_snapshot("tests/golden/retirement_sweep_guardrails.json", &json);
@@ -1272,14 +1516,30 @@ mod tests {
         let inputs = build_inputs(cli).expect("valid inputs");
         let retirement_age = 35;
         let model = run_coast_model(&inputs, retirement_age);
+        let trace_index = model.selected_index.unwrap_or(model.best_index);
+        let trace_candidate_age = model.age_results[trace_index].retirement_age;
+        let cashflow = run_yearly_cashflow_trace(
+            &inputs,
+            retirement_age,
+            trace_candidate_age,
+            trace_candidate_age,
+        );
+        let cashflow_response = CashflowResponse {
+            candidate_age: trace_candidate_age,
+            retirement_age,
+            contribution_stop_age: trace_candidate_age,
+            years: &cashflow,
+        };
+        let response = build_simulate_response(
+            &inputs,
+            &model,
+            AnalysisMode::CoastFire,
+            Some(retirement_age),
+            cashflow_response,
+        );
         let json = format!(
             "{}\n",
-            model_to_json(
-                &inputs,
-                &model,
-                AnalysisMode::CoastFire,
-                Some(retirement_age),
-            )
+            serde_json::to_string(&response).expect("response should serialize")
         );
 
         assert_golden_snapshot("tests/golden/coast_fire_vpw.json", &json);

@@ -1,7 +1,8 @@
 use std::f64::consts::PI;
 
 use super::types::{
-    AgeResult, Inputs, ModelResult, PensionTaxMode, WithdrawalOrder, WithdrawalStrategy,
+    AgeResult, CashflowYearResult, Inputs, ModelResult, PensionTaxMode, WithdrawalOrder,
+    WithdrawalStrategy,
 };
 
 #[derive(Debug)]
@@ -21,6 +22,53 @@ struct ScenarioResult {
     avg_income_ratio: f64,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct ContributionFlow {
+    isa: f64,
+    taxable: f64,
+    pension: f64,
+}
+
+impl ContributionFlow {
+    fn total(self) -> f64 {
+        self.isa + self.taxable + self.pension
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct WithdrawalYearOutcome {
+    realized_spending_net: f64,
+    portfolio_withdrawn_net: f64,
+    non_pension_income_used: f64,
+    cgt_tax_paid: f64,
+    income_tax_paid: f64,
+}
+
+impl WithdrawalYearOutcome {
+    fn total_tax_paid(self) -> f64 {
+        self.cgt_tax_paid + self.income_tax_paid
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct YearTracePoint {
+    contribution_isa_real: f64,
+    contribution_taxable_real: f64,
+    contribution_pension_real: f64,
+    contribution_total_real: f64,
+    withdrawal_portfolio_real: f64,
+    withdrawal_non_pension_income_real: f64,
+    spending_total_real: f64,
+    tax_cgt_real: f64,
+    tax_income_real: f64,
+    tax_total_real: f64,
+    end_isa_real: f64,
+    end_taxable_real: f64,
+    end_pension_real: f64,
+    end_cash_real: f64,
+    end_total_real: f64,
+}
+
 #[derive(Debug)]
 struct Portfolio {
     isa: f64,
@@ -33,6 +81,7 @@ struct Portfolio {
 #[derive(Debug)]
 struct CgtState {
     allowance_remaining: f64,
+    tax_paid: f64,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -82,6 +131,158 @@ pub fn run_coast_model(inputs: &Inputs, retirement_age: u32) -> ModelResult {
     build_model_result(age_results, inputs.success_threshold)
 }
 
+struct YearlyAccumulator {
+    ages: Vec<u32>,
+    contribution_isa: Vec<Vec<f64>>,
+    contribution_taxable: Vec<Vec<f64>>,
+    contribution_pension: Vec<Vec<f64>>,
+    contribution_total: Vec<Vec<f64>>,
+    withdrawal_portfolio: Vec<Vec<f64>>,
+    withdrawal_non_pension_income: Vec<Vec<f64>>,
+    spending_total: Vec<Vec<f64>>,
+    tax_cgt: Vec<Vec<f64>>,
+    tax_income: Vec<Vec<f64>>,
+    tax_total: Vec<Vec<f64>>,
+    end_isa: Vec<Vec<f64>>,
+    end_taxable: Vec<Vec<f64>>,
+    end_pension: Vec<Vec<f64>>,
+    end_cash: Vec<Vec<f64>>,
+    end_total: Vec<Vec<f64>>,
+}
+
+impl YearlyAccumulator {
+    fn new(ages: Vec<u32>, expected_samples: usize) -> Self {
+        let year_count = ages.len();
+        let make = || {
+            (0..year_count)
+                .map(|_| Vec::with_capacity(expected_samples))
+                .collect::<Vec<_>>()
+        };
+
+        Self {
+            ages,
+            contribution_isa: make(),
+            contribution_taxable: make(),
+            contribution_pension: make(),
+            contribution_total: make(),
+            withdrawal_portfolio: make(),
+            withdrawal_non_pension_income: make(),
+            spending_total: make(),
+            tax_cgt: make(),
+            tax_income: make(),
+            tax_total: make(),
+            end_isa: make(),
+            end_taxable: make(),
+            end_pension: make(),
+            end_cash: make(),
+            end_total: make(),
+        }
+    }
+
+    fn push(&mut self, index: usize, point: YearTracePoint) {
+        self.contribution_isa[index].push(point.contribution_isa_real);
+        self.contribution_taxable[index].push(point.contribution_taxable_real);
+        self.contribution_pension[index].push(point.contribution_pension_real);
+        self.contribution_total[index].push(point.contribution_total_real);
+        self.withdrawal_portfolio[index].push(point.withdrawal_portfolio_real);
+        self.withdrawal_non_pension_income[index].push(point.withdrawal_non_pension_income_real);
+        self.spending_total[index].push(point.spending_total_real);
+        self.tax_cgt[index].push(point.tax_cgt_real);
+        self.tax_income[index].push(point.tax_income_real);
+        self.tax_total[index].push(point.tax_total_real);
+        self.end_isa[index].push(point.end_isa_real);
+        self.end_taxable[index].push(point.end_taxable_real);
+        self.end_pension[index].push(point.end_pension_real);
+        self.end_cash[index].push(point.end_cash_real);
+        self.end_total[index].push(point.end_total_real);
+    }
+
+    fn into_results(mut self) -> Vec<CashflowYearResult> {
+        let mut results = Vec::with_capacity(self.ages.len());
+        for idx in 0..self.ages.len() {
+            results.push(CashflowYearResult {
+                age: self.ages[idx],
+                median_contribution_isa: percentile(&mut self.contribution_isa[idx], 50.0),
+                median_contribution_taxable: percentile(&mut self.contribution_taxable[idx], 50.0),
+                median_contribution_pension: percentile(&mut self.contribution_pension[idx], 50.0),
+                median_contribution_total: percentile(&mut self.contribution_total[idx], 50.0),
+                median_withdrawal_portfolio: percentile(&mut self.withdrawal_portfolio[idx], 50.0),
+                median_withdrawal_non_pension_income: percentile(
+                    &mut self.withdrawal_non_pension_income[idx],
+                    50.0,
+                ),
+                median_spending_total: percentile(&mut self.spending_total[idx], 50.0),
+                median_tax_cgt: percentile(&mut self.tax_cgt[idx], 50.0),
+                median_tax_income: percentile(&mut self.tax_income[idx], 50.0),
+                median_tax_total: percentile(&mut self.tax_total[idx], 50.0),
+                median_end_isa: percentile(&mut self.end_isa[idx], 50.0),
+                median_end_taxable: percentile(&mut self.end_taxable[idx], 50.0),
+                median_end_pension: percentile(&mut self.end_pension[idx], 50.0),
+                median_end_cash: percentile(&mut self.end_cash[idx], 50.0),
+                median_end_total: percentile(&mut self.end_total[idx], 50.0),
+            });
+        }
+        results
+    }
+}
+
+pub fn run_yearly_cashflow_trace(
+    inputs: &Inputs,
+    retirement_age: u32,
+    contribution_stop_age: u32,
+    reported_age: u32,
+) -> Vec<CashflowYearResult> {
+    let ages = (inputs.current_age..inputs.horizon_age).collect::<Vec<_>>();
+    if ages.is_empty() {
+        return Vec::new();
+    }
+
+    let mut acc = YearlyAccumulator::new(ages.clone(), inputs.simulations as usize);
+
+    for scenario_id in 0..inputs.simulations {
+        let scenario_seed = derive_seed(inputs.seed, reported_age, scenario_id);
+        let mut rng = Rng::new(scenario_seed);
+        let mut trace = Vec::with_capacity(ages.len());
+        let _ = simulate_scenario(
+            inputs,
+            retirement_age,
+            contribution_stop_age,
+            &mut rng,
+            Some(&mut trace),
+        );
+
+        if trace.len() == ages.len() {
+            for (idx, point) in trace.into_iter().enumerate() {
+                acc.push(idx, point);
+            }
+            continue;
+        }
+
+        for idx in 0..ages.len() {
+            let fallback = trace.get(idx).copied().unwrap_or(YearTracePoint {
+                contribution_isa_real: 0.0,
+                contribution_taxable_real: 0.0,
+                contribution_pension_real: 0.0,
+                contribution_total_real: 0.0,
+                withdrawal_portfolio_real: 0.0,
+                withdrawal_non_pension_income_real: 0.0,
+                spending_total_real: 0.0,
+                tax_cgt_real: 0.0,
+                tax_income_real: 0.0,
+                tax_total_real: 0.0,
+                end_isa_real: 0.0,
+                end_taxable_real: 0.0,
+                end_pension_real: 0.0,
+                end_cash_real: 0.0,
+                end_total_real: 0.0,
+            });
+            acc.push(idx, fallback);
+        }
+    }
+
+    acc.into_results()
+}
+
 fn build_model_result(age_results: Vec<AgeResult>, success_threshold: f64) -> ModelResult {
     let selected_index = age_results
         .iter()
@@ -123,7 +324,13 @@ fn evaluate_age_candidate(
     for scenario_id in 0..inputs.simulations {
         let scenario_seed = derive_seed(inputs.seed, reported_age, scenario_id);
         let mut rng = Rng::new(scenario_seed);
-        let scenario = simulate_scenario(inputs, retirement_age, contribution_stop_age, &mut rng);
+        let scenario = simulate_scenario(
+            inputs,
+            retirement_age,
+            contribution_stop_age,
+            &mut rng,
+            None,
+        );
         if scenario.success {
             successes += 1;
         }
@@ -175,6 +382,7 @@ fn simulate_scenario(
     retirement_age: u32,
     contribution_stop_age: u32,
     rng: &mut Rng,
+    mut trace: Option<&mut Vec<YearTracePoint>>,
 ) -> ScenarioResult {
     let mut portfolio = Portfolio {
         isa: inputs.isa_start,
@@ -189,10 +397,41 @@ fn simulate_scenario(
     for (years_since_start, age) in (inputs.current_age..retirement_age).enumerate() {
         let sampled = sample_market(inputs, rng);
         apply_pre_retirement_growth(inputs, &mut portfolio, &sampled);
-        if age < contribution_stop_age {
-            apply_pre_retirement_contributions(inputs, &mut portfolio, years_since_start as u32);
-        }
+        let contributions = if age < contribution_stop_age {
+            apply_pre_retirement_contributions(inputs, &mut portfolio, years_since_start as u32)
+        } else {
+            ContributionFlow {
+                isa: 0.0,
+                taxable: 0.0,
+                pension: 0.0,
+            }
+        };
         price_index *= 1.0 + sampled.inflation;
+
+        if let Some(trace_rows) = trace.as_deref_mut() {
+            let deflator = price_index.max(1e-9);
+            trace_rows.push(YearTracePoint {
+                contribution_isa_real: contributions.isa / deflator,
+                contribution_taxable_real: contributions.taxable / deflator,
+                contribution_pension_real: contributions.pension / deflator,
+                contribution_total_real: contributions.total() / deflator,
+                withdrawal_portfolio_real: 0.0,
+                withdrawal_non_pension_income_real: 0.0,
+                spending_total_real: 0.0,
+                tax_cgt_real: 0.0,
+                tax_income_real: 0.0,
+                tax_total_real: 0.0,
+                end_isa_real: portfolio.isa / deflator,
+                end_taxable_real: portfolio.taxable / deflator,
+                end_pension_real: portfolio.pension / deflator,
+                end_cash_real: portfolio.cash_buffer / deflator,
+                end_total_real: (portfolio.isa
+                    + portfolio.taxable
+                    + portfolio.pension
+                    + portfolio.cash_buffer)
+                    / deflator,
+            });
+        }
     }
 
     let retirement_deflator = price_index.max(1e-9);
@@ -233,6 +472,7 @@ fn simulate_scenario(
         let planned_nominal_spending = planned_real_spending * price_index;
         let mut cgt_state = CgtState {
             allowance_remaining: inputs.capital_gains_allowance,
+            tax_paid: 0.0,
         };
 
         let state_pension_gross = state_pension_gross_income(inputs, age, price_index);
@@ -243,7 +483,7 @@ fn simulate_scenario(
             price_index,
         };
 
-        let realized_nominal_spending = run_withdrawal_year(
+        let year_outcome = run_withdrawal_year(
             inputs,
             age,
             planned_nominal_spending,
@@ -256,17 +496,37 @@ fn simulate_scenario(
         );
 
         let required_real_spending = required_real_spending(inputs, age).max(1e-9);
-        let income_ratio = (realized_nominal_spending / price_index) / required_real_spending;
+        let income_ratio =
+            (year_outcome.realized_spending_net / price_index) / required_real_spending;
         min_income_ratio = min_income_ratio.min(income_ratio);
         income_ratio_sum += income_ratio;
         years += 1;
 
-        let start_invested = portfolio.isa + portfolio.taxable + portfolio.pension;
-        apply_post_retirement_growth(inputs, &mut portfolio, &sampled);
-        let end_invested = portfolio.isa + portfolio.taxable + portfolio.pension;
-        prev_real_return = realized_real_return(start_invested, end_invested, sampled.inflation);
+        let failed = year_outcome.realized_spending_net + 1e-9 < planned_nominal_spending;
+        if failed {
+            if let Some(trace_rows) = trace.as_deref_mut() {
+                let deflator = price_index.max(1e-9);
+                trace_rows.push(YearTracePoint {
+                    contribution_isa_real: 0.0,
+                    contribution_taxable_real: 0.0,
+                    contribution_pension_real: 0.0,
+                    contribution_total_real: 0.0,
+                    withdrawal_portfolio_real: year_outcome.portfolio_withdrawn_net / deflator,
+                    withdrawal_non_pension_income_real: year_outcome.non_pension_income_used
+                        / deflator,
+                    spending_total_real: year_outcome.realized_spending_net / deflator,
+                    tax_cgt_real: year_outcome.cgt_tax_paid / deflator,
+                    tax_income_real: year_outcome.income_tax_paid / deflator,
+                    tax_total_real: year_outcome.total_tax_paid() / deflator,
+                    end_isa_real: 0.0,
+                    end_taxable_real: 0.0,
+                    end_pension_real: 0.0,
+                    end_cash_real: 0.0,
+                    end_total_real: 0.0,
+                });
+                push_zero_trace_tail(trace_rows, age + 1, inputs.horizon_age);
+            }
 
-        if realized_nominal_spending + 1e-9 < planned_nominal_spending {
             return ScenarioResult {
                 success: false,
                 reported_retirement_total: retirement_total_real,
@@ -282,6 +542,36 @@ fn simulate_scenario(
                 min_income_ratio,
                 avg_income_ratio: income_ratio_sum / years as f64,
             };
+        }
+
+        let start_invested = portfolio.isa + portfolio.taxable + portfolio.pension;
+        apply_post_retirement_growth(inputs, &mut portfolio, &sampled);
+        let end_invested = portfolio.isa + portfolio.taxable + portfolio.pension;
+        prev_real_return = realized_real_return(start_invested, end_invested, sampled.inflation);
+
+        if let Some(trace_rows) = trace.as_deref_mut() {
+            let deflator = price_index.max(1e-9);
+            trace_rows.push(YearTracePoint {
+                contribution_isa_real: 0.0,
+                contribution_taxable_real: 0.0,
+                contribution_pension_real: 0.0,
+                contribution_total_real: 0.0,
+                withdrawal_portfolio_real: year_outcome.portfolio_withdrawn_net / deflator,
+                withdrawal_non_pension_income_real: year_outcome.non_pension_income_used / deflator,
+                spending_total_real: year_outcome.realized_spending_net / deflator,
+                tax_cgt_real: year_outcome.cgt_tax_paid / deflator,
+                tax_income_real: year_outcome.income_tax_paid / deflator,
+                tax_total_real: year_outcome.total_tax_paid() / deflator,
+                end_isa_real: portfolio.isa / deflator,
+                end_taxable_real: portfolio.taxable / deflator,
+                end_pension_real: portfolio.pension / deflator,
+                end_cash_real: portfolio.cash_buffer / deflator,
+                end_total_real: (portfolio.isa
+                    + portfolio.taxable
+                    + portfolio.pension
+                    + portfolio.cash_buffer)
+                    / deflator,
+            });
         }
     }
 
@@ -306,6 +596,28 @@ fn simulate_scenario(
     }
 }
 
+fn push_zero_trace_tail(trace: &mut Vec<YearTracePoint>, start_age: u32, horizon_age: u32) {
+    for _ in start_age..horizon_age {
+        trace.push(YearTracePoint {
+            contribution_isa_real: 0.0,
+            contribution_taxable_real: 0.0,
+            contribution_pension_real: 0.0,
+            contribution_total_real: 0.0,
+            withdrawal_portfolio_real: 0.0,
+            withdrawal_non_pension_income_real: 0.0,
+            spending_total_real: 0.0,
+            tax_cgt_real: 0.0,
+            tax_income_real: 0.0,
+            tax_total_real: 0.0,
+            end_isa_real: 0.0,
+            end_taxable_real: 0.0,
+            end_pension_real: 0.0,
+            end_cash_real: 0.0,
+            end_total_real: 0.0,
+        });
+    }
+}
+
 fn apply_pre_retirement_growth(inputs: &Inputs, portfolio: &mut Portfolio, sampled: &MarketSample) {
     portfolio.isa = (portfolio.isa * (1.0 + sampled.isa_return)).max(0.0);
     portfolio.taxable = (portfolio.taxable * (1.0 + sampled.taxable_return)).max(0.0);
@@ -319,7 +631,7 @@ fn apply_pre_retirement_contributions(
     inputs: &Inputs,
     portfolio: &mut Portfolio,
     years_since_start: u32,
-) {
+) -> ContributionFlow {
     let contribution_multiplier =
         (1.0 + inputs.contribution_growth_rate).powi(years_since_start as i32);
     let requested_isa_contribution = inputs.isa_annual_contribution * contribution_multiplier;
@@ -337,7 +649,14 @@ fn apply_pre_retirement_contributions(
     portfolio.isa += isa_contribution;
     portfolio.taxable += taxable_contribution;
     portfolio.taxable_basis += taxable_contribution;
-    portfolio.pension += requested_pension_contribution.max(0.0);
+    let pension_contribution = requested_pension_contribution.max(0.0);
+    portfolio.pension += pension_contribution;
+
+    ContributionFlow {
+        isa: isa_contribution,
+        taxable: taxable_contribution,
+        pension: pension_contribution,
+    }
 }
 
 fn apply_post_retirement_growth(
@@ -487,8 +806,10 @@ fn run_withdrawal_year(
     cgt_state: &mut CgtState,
     tax_state: &mut TaxYearState,
     net_non_pension_income: f64,
-) -> f64 {
+) -> WithdrawalYearOutcome {
     let mut realized = 0.0;
+    let starting_cgt_tax_paid = cgt_state.tax_paid;
+    let mut portfolio_withdrawn_total = 0.0;
 
     let non_pension_used = net_non_pension_income.min(planned_nominal_spending);
     realized += non_pension_used;
@@ -502,7 +823,7 @@ fn run_withdrawal_year(
     realized += from_cash;
 
     let needed = (planned_nominal_spending - realized).max(0.0);
-    realized += withdraw_from_portfolio(
+    let main_withdrawn = withdraw_from_portfolio(
         inputs,
         age,
         needed,
@@ -511,6 +832,8 @@ fn run_withdrawal_year(
         tax_state,
         inputs.post_access_withdrawal_order,
     );
+    realized += main_withdrawn;
+    portfolio_withdrawn_total += main_withdrawn;
 
     if prev_real_return > inputs.good_year_threshold {
         let extra = match inputs.withdrawal_strategy {
@@ -540,10 +863,23 @@ fn run_withdrawal_year(
                 inputs.post_access_withdrawal_order,
             );
             portfolio.cash_buffer += extra_withdrawn;
+            portfolio_withdrawn_total += extra_withdrawn;
         }
     }
 
-    realized
+    let total_gross_income =
+        tax_state.non_pension_taxable_income + tax_state.pension_gross_withdrawn;
+    let income_tax_paid =
+        income_tax_for_total_income(total_gross_income, inputs, tax_state.price_index);
+    let cgt_tax_paid = (cgt_state.tax_paid - starting_cgt_tax_paid).max(0.0);
+
+    WithdrawalYearOutcome {
+        realized_spending_net: realized,
+        portfolio_withdrawn_net: portfolio_withdrawn_total,
+        non_pension_income_used: non_pension_used,
+        cgt_tax_paid,
+        income_tax_paid,
+    }
 }
 
 fn withdraw_from_portfolio(
@@ -968,6 +1304,7 @@ fn execute_taxable_sale(
 
     let taxable_gain = (realized_gain - allowance_used).max(0.0);
     let tax = taxable_gain * cgt_rate.max(0.0);
+    cgt_state.tax_paid += tax;
     (gross - tax).max(0.0)
 }
 
@@ -1454,7 +1791,7 @@ mod tests {
         inputs.state_pension_annual_income = 10_000.0;
 
         let mut rng = Rng::new(1);
-        let s = simulate_scenario(&inputs, 30, 30, &mut rng);
+        let s = simulate_scenario(&inputs, 30, 30, &mut rng, None);
         assert!(s.success);
     }
 
@@ -1516,14 +1853,14 @@ mod tests {
         inputs.post_access_withdrawal_order = WithdrawalOrder::IsaFirst;
 
         let mut rng = Rng::new(123);
-        let ends_early = simulate_scenario(&inputs, 30, 30, &mut rng);
+        let ends_early = simulate_scenario(&inputs, 30, 30, &mut rng, None);
         assert!(ends_early.success);
         assert_approx(ends_early.reported_terminal_total, 0.0);
         assert_approx(ends_early.min_income_ratio, 1.0);
 
         inputs.mortgage_end_age = Some(35);
         let mut rng2 = Rng::new(123);
-        let ends_late = simulate_scenario(&inputs, 30, 30, &mut rng2);
+        let ends_late = simulate_scenario(&inputs, 30, 30, &mut rng2, None);
         assert!(!ends_late.success);
         assert!(ends_late.min_income_ratio < 1.0);
     }
@@ -1546,6 +1883,7 @@ mod tests {
         let mut basis = 40.0;
         let mut cgt = CgtState {
             allowance_remaining: 10.0,
+            tax_paid: 0.0,
         };
 
         let net = execute_taxable_sale(50.0, &mut taxable, &mut basis, &mut cgt, 0.20);
@@ -1561,6 +1899,7 @@ mod tests {
         let mut basis = 40.0;
         let mut cgt = CgtState {
             allowance_remaining: 10.0,
+            tax_paid: 0.0,
         };
 
         let withdrawn =
@@ -1583,6 +1922,7 @@ mod tests {
         };
         let mut cgt = CgtState {
             allowance_remaining: 3_000.0,
+            tax_paid: 0.0,
         };
         let mut tax_state = TaxYearState {
             non_pension_taxable_income: 0.0,
@@ -1620,6 +1960,7 @@ mod tests {
         };
         let mut cgt = CgtState {
             allowance_remaining: 3_000.0,
+            tax_paid: 0.0,
         };
         let mut tax_state = TaxYearState {
             non_pension_taxable_income: 0.0,
@@ -1627,7 +1968,7 @@ mod tests {
             price_index: 1.0,
         };
 
-        let realized = run_withdrawal_year(
+        let outcome = run_withdrawal_year(
             &inputs,
             60,
             100.0,
@@ -1638,7 +1979,7 @@ mod tests {
             &mut tax_state,
             0.0,
         );
-        assert_approx(realized, 100.0);
+        assert_approx(outcome.realized_spending_net, 100.0);
         assert_approx(portfolio.cash_buffer, 10.0);
         assert_approx(portfolio.isa, 90.0);
     }
@@ -1714,6 +2055,7 @@ mod tests {
         };
         let mut cgt = CgtState {
             allowance_remaining: 3_000.0,
+            tax_paid: 0.0,
         };
         let mut tax_state = TaxYearState {
             non_pension_taxable_income: 0.0,
@@ -1721,7 +2063,7 @@ mod tests {
             price_index: 1.0,
         };
 
-        let realized = run_withdrawal_year(
+        let outcome = run_withdrawal_year(
             &inputs,
             60,
             100.0,
@@ -1733,7 +2075,7 @@ mod tests {
             0.0,
         );
 
-        assert_approx(realized, 100.0);
+        assert_approx(outcome.realized_spending_net, 100.0);
         assert_approx(portfolio.cash_buffer, 200.0);
     }
 
@@ -1817,14 +2159,66 @@ mod tests {
         inputs.good_year_extra_buffer_withdrawal = 0.0;
 
         let mut rng_a = Rng::new(7);
-        let coast_from_31 = simulate_scenario(&inputs, 32, 31, &mut rng_a);
+        let coast_from_31 = simulate_scenario(&inputs, 32, 31, &mut rng_a, None);
         assert!(coast_from_31.success);
         assert_approx(coast_from_31.reported_retirement_total, 1_000.0);
 
         let mut rng_b = Rng::new(7);
-        let coast_from_32 = simulate_scenario(&inputs, 32, 32, &mut rng_b);
+        let coast_from_32 = simulate_scenario(&inputs, 32, 32, &mut rng_b, None);
         assert!(coast_from_32.success);
         assert_approx(coast_from_32.reported_retirement_total, 2_000.0);
+    }
+
+    #[test]
+    fn yearly_cashflow_trace_includes_contributions_spending_taxes_and_balances() {
+        let mut inputs = sample_inputs();
+        inputs.current_age = 30;
+        inputs.max_retirement_age = 31;
+        inputs.horizon_age = 34;
+        inputs.simulations = 5;
+        inputs.seed = 99;
+        inputs.isa_start = 50_000.0;
+        inputs.taxable_start = 0.0;
+        inputs.taxable_cost_basis_start = 0.0;
+        inputs.pension_start = 0.0;
+        inputs.cash_start = 0.0;
+        inputs.isa_annual_contribution = 12_000.0;
+        inputs.isa_annual_contribution_limit = 10_000.0;
+        inputs.taxable_annual_contribution = 2_000.0;
+        inputs.pension_annual_contribution = 1_000.0;
+        inputs.contribution_growth_rate = 0.0;
+        inputs.target_annual_income = 10_000.0;
+        inputs.isa_return_mean = 0.0;
+        inputs.taxable_return_mean = 0.0;
+        inputs.pension_return_mean = 0.0;
+        inputs.isa_return_vol = 0.0;
+        inputs.taxable_return_vol = 0.0;
+        inputs.pension_return_vol = 0.0;
+        inputs.inflation_mean = 0.0;
+        inputs.inflation_vol = 0.0;
+        inputs.taxable_return_tax_drag = 0.0;
+        inputs.capital_gains_tax_rate = 0.0;
+        inputs.capital_gains_allowance = 0.0;
+        inputs.pension_tax_mode = PensionTaxMode::FlatRate;
+        inputs.pension_flat_tax_rate = 0.0;
+        inputs.state_pension_start_age = 200;
+        inputs.state_pension_annual_income = 0.0;
+        inputs.good_year_extra_buffer_withdrawal = 0.0;
+        inputs.cash_growth_rate = 0.0;
+        inputs.post_access_withdrawal_order = WithdrawalOrder::IsaFirst;
+
+        let rows = run_yearly_cashflow_trace(&inputs, 31, 31, 31);
+        assert_eq!(rows.len(), 4);
+        assert_eq!(rows[0].age, 30);
+        assert_eq!(rows[1].age, 31);
+        assert_approx(rows[0].median_contribution_isa, 10_000.0);
+        assert_approx(rows[0].median_contribution_taxable, 4_000.0);
+        assert_approx(rows[0].median_contribution_pension, 1_000.0);
+        assert_approx(rows[0].median_contribution_total, 15_000.0);
+        assert_approx(rows[1].median_contribution_total, 0.0);
+        assert_approx(rows[1].median_spending_total, 10_000.0);
+        assert_approx(rows[1].median_tax_total, 0.0);
+        assert!(rows[1].median_end_total >= 0.0);
     }
 
     #[test]

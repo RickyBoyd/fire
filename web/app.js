@@ -210,6 +210,9 @@
   const summaryCards = document.getElementById("summary-cards");
   const runMeta = document.getElementById("run-meta");
   const tableBody = document.querySelector("#age-table tbody");
+  const cashflowTableBody = document.querySelector("#cashflow-table tbody");
+  const cashflowMeta = document.getElementById("cashflow-meta");
+  const cashflowTitle = document.getElementById("cashflow-title");
   const ageColHeader = document.getElementById("age-col-header");
   const chart = document.getElementById("success-chart");
   const quickPresetButtons = Array.from(
@@ -375,9 +378,16 @@
 
     try {
       const params = buildApiParams();
+      const payloadBody = buildApiPayload(params);
 
       const started = performance.now();
-      const response = await fetch(`/api/simulate?${params.toString()}`);
+      const response = await fetch("/api/simulate", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(payloadBody)
+      });
       const payload = await response.json();
 
       if (!response.ok) {
@@ -385,6 +395,7 @@
       }
 
       const ageResults = payload.ageResults || [];
+      const cashflowYears = payload.cashflowYears || [];
       const mode = payload.mode === "coast" ? "coast" : "retirement";
       const withdrawalPolicy = String(payload.withdrawalPolicy || "guardrails");
       const coastRetirementAge =
@@ -404,6 +415,16 @@
         throw new Error("No results returned from API");
       }
 
+      const cashflowCandidateAge = Number(
+        payload.cashflowCandidateAge ?? best.retirementAge
+      );
+      const cashflowRetirementAge = Number(
+        payload.cashflowRetirementAge ?? cashflowCandidateAge
+      );
+      const cashflowContributionStopAge = Number(
+        payload.cashflowContributionStopAge ?? cashflowCandidateAge
+      );
+
       lastResults = {
         mode,
         withdrawalPolicy,
@@ -411,11 +432,16 @@
         successThreshold: Number(payload.successThreshold || 0),
         selectedRetirementAge: payload.selectedRetirementAge,
         bestRetirementAge: payload.bestRetirementAge,
-        ageResults
+        ageResults,
+        cashflowCandidateAge,
+        cashflowRetirementAge,
+        cashflowContributionStopAge,
+        cashflowYears
       };
 
       renderSummary(lastResults, selected, best);
       renderTable(ageResults, mode);
+      renderCashflowTable(lastResults);
       renderChart(ageResults, lastResults.successThreshold, mode);
 
       const seconds = (performance.now() - started) / 1000;
@@ -541,6 +567,70 @@
           <td>${money(r.p10TerminalTaxable)}</td>
           <td>${money(r.p10TerminalPension)}</td>
           <td>${money(r.p10TerminalCash)}</td>
+        </tr>`
+      )
+      .join("");
+  }
+
+  function renderCashflowTable(results) {
+    if (!cashflowTableBody || !cashflowMeta || !cashflowTitle) {
+      return;
+    }
+
+    const rows = Array.isArray(results.cashflowYears) ? results.cashflowYears : [];
+    const candidateAge = Number(results.cashflowCandidateAge);
+    const retirementAge = Number(results.cashflowRetirementAge);
+    const contributionStopAge = Number(results.cashflowContributionStopAge);
+    const validCandidate = Number.isFinite(candidateAge)
+      ? Math.round(candidateAge)
+      : null;
+    const validRetirement = Number.isFinite(retirementAge)
+      ? Math.round(retirementAge)
+      : null;
+    const validContributionStop = Number.isFinite(contributionStopAge)
+      ? Math.round(contributionStopAge)
+      : null;
+
+    if (results.mode === "coast") {
+      const retireText =
+        validRetirement === null ? "?" : String(validRetirement);
+      const coastText =
+        validContributionStop === null ? "?" : String(validContributionStop);
+      cashflowTitle.textContent = "Yearly Cashflow (Coast Candidate)";
+      cashflowMeta.textContent =
+        `Medians by age for coast age ${coastText} and retirement age ${retireText} (values in today's money).`;
+    } else {
+      const ageText = validCandidate === null ? "?" : String(validCandidate);
+      cashflowTitle.textContent = "Yearly Cashflow";
+      cashflowMeta.textContent =
+        `Medians by age for retirement age ${ageText} (values in today's money).`;
+    }
+
+    if (rows.length === 0) {
+      cashflowTableBody.innerHTML =
+        '<tr><td colspan="16">No yearly cashflow trace available for this run.</td></tr>';
+      return;
+    }
+
+    cashflowTableBody.innerHTML = rows
+      .map(
+        (row) => `<tr>
+          <td>${Math.round(Number(row.age || 0))}</td>
+          <td>${money(row.medianContributionIsa)}</td>
+          <td>${money(row.medianContributionTaxable)}</td>
+          <td>${money(row.medianContributionPension)}</td>
+          <td>${money(row.medianContributionTotal)}</td>
+          <td>${money(row.medianWithdrawalPortfolio)}</td>
+          <td>${money(row.medianWithdrawalNonPensionIncome)}</td>
+          <td>${money(row.medianSpendingTotal)}</td>
+          <td>${money(row.medianTaxCgt)}</td>
+          <td>${money(row.medianTaxIncome)}</td>
+          <td>${money(row.medianTaxTotal)}</td>
+          <td>${money(row.medianEndIsa)}</td>
+          <td>${money(row.medianEndTaxable)}</td>
+          <td>${money(row.medianEndPension)}</td>
+          <td>${money(row.medianEndCash)}</td>
+          <td>${money(row.medianEndTotal)}</td>
         </tr>`
       )
       .join("");
@@ -778,6 +868,29 @@
       params.set(String(key), String(value));
     }
     return params;
+  }
+
+  function buildApiPayload(params) {
+    const payload = {};
+    for (const [key, value] of params.entries()) {
+      const text = String(value).trim();
+      if (text === "") {
+        continue;
+      }
+      if (isNumericLiteral(text)) {
+        payload[key] = Number(text);
+      } else {
+        payload[key] = text;
+      }
+    }
+    return payload;
+  }
+
+  function isNumericLiteral(text) {
+    if (!/^[+-]?(?:\d+\.?\d*|\.\d+)$/.test(text)) {
+      return false;
+    }
+    return Number.isFinite(Number(text));
   }
 
   function buildBasicApiParams() {

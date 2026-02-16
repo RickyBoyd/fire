@@ -1,3 +1,5 @@
+use serde::Serialize;
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum WithdrawalOrder {
     ProRata,
@@ -84,7 +86,8 @@ pub struct Inputs {
     pub post_access_withdrawal_order: WithdrawalOrder,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AgeResult {
     pub retirement_age: u32,
     pub success_rate: f64,
@@ -117,4 +120,25 @@ pub struct ModelResult {
     pub age_results: Vec<AgeResult>,
     pub selected_index: Option<usize>,
     pub best_index: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CashflowYearResult {
+    pub age: u32,
+    pub median_contribution_isa: f64,
+    pub median_contribution_taxable: f64,
+    pub median_contribution_pension: f64,
+    pub median_contribution_total: f64,
+    pub median_withdrawal_portfolio: f64,
+    pub median_withdrawal_non_pension_income: f64,
+    pub median_spending_total: f64,
+    pub median_tax_cgt: f64,
+    pub median_tax_income: f64,
+    pub median_tax_total: f64,
+    pub median_end_isa: f64,
+    pub median_end_taxable: f64,
+    pub median_end_pension: f64,
+    pub median_end_cash: f64,
+    pub median_end_total: f64,
 }
