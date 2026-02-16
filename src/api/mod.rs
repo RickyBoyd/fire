@@ -11,8 +11,9 @@ use std::net::SocketAddr;
 use tokio::net::TcpListener;
 
 use crate::core::{
-    AgeResult, CashflowYearResult, Inputs, ModelResult, PensionTaxMode, WithdrawalOrder,
-    WithdrawalStrategy, run_coast_model, run_model, run_yearly_cashflow_trace,
+    AgeResult, CashflowYearResult, ContributionAllocation, GoalSolveConfig, GoalSolveIteration,
+    GoalSolveResult, GoalType, Inputs, ModelResult, PensionTaxMode, WithdrawalOrder,
+    WithdrawalStrategy, run_coast_model, run_model, run_yearly_cashflow_trace, solve_goal,
 };
 
 const INDEX_HTML: &str = include_str!("../../web/index.html");
@@ -177,6 +178,33 @@ impl From<ApiAnalysisMode> for AnalysisMode {
     }
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum ApiGoalType {
+    #[serde(alias = "requiredContribution", alias = "required_contribution")]
+    RequiredContribution,
+    #[serde(alias = "maxIncome", alias = "max_income")]
+    MaxIncome,
+}
+
+impl From<ApiGoalType> for GoalType {
+    fn from(value: ApiGoalType) -> Self {
+        match value {
+            ApiGoalType::RequiredContribution => GoalType::RequiredContribution,
+            ApiGoalType::MaxIncome => GoalType::MaxIncome,
+        }
+    }
+}
+
+impl From<GoalType> for ApiGoalType {
+    fn from(value: GoalType) -> Self {
+        match value {
+            GoalType::RequiredContribution => ApiGoalType::RequiredContribution,
+            GoalType::MaxIncome => ApiGoalType::MaxIncome,
+        }
+    }
+}
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
 enum ResponseMode {
@@ -193,7 +221,7 @@ impl From<AnalysisMode> for ResponseMode {
     }
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, Clone)]
 #[serde(default, rename_all = "camelCase")]
 struct SimulatePayload {
     current_age: Option<u32>,
@@ -264,6 +292,22 @@ struct SimulatePayload {
 
     analysis_mode: Option<ApiAnalysisMode>,
     coast_retirement_age: Option<u32>,
+}
+
+#[derive(Debug, Default, Deserialize, Clone)]
+#[serde(default, rename_all = "camelCase")]
+struct SolveGoalPayload {
+    #[serde(flatten)]
+    simulation: SimulatePayload,
+    goal_type: Option<ApiGoalType>,
+    target_retirement_age: Option<u32>,
+    target_success_threshold: Option<f64>,
+    search_min: Option<f64>,
+    search_max: Option<f64>,
+    tolerance: Option<f64>,
+    max_iterations: Option<u32>,
+    simulations_per_iteration: Option<u32>,
+    final_simulations: Option<u32>,
 }
 
 #[derive(Parser, Debug)]
@@ -572,8 +616,49 @@ struct SimulateResponse {
 }
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SolveGoalIterationResponse {
+    iteration: u32,
+    lower_bound: f64,
+    upper_bound: f64,
+    candidate_value: f64,
+    success_rate: f64,
+    success_ci_half_width: f64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SolveGoalResponse {
+    goal_type: ApiGoalType,
+    target_retirement_age: u32,
+    target_success_threshold: f64,
+    search_min: f64,
+    search_max: f64,
+    tolerance: f64,
+    max_iterations: u32,
+    simulations_per_iteration: u32,
+    final_simulations: u32,
+    solved_value: Option<f64>,
+    solved_contribution_total: Option<f64>,
+    solved_contribution_isa: Option<f64>,
+    solved_contribution_taxable: Option<f64>,
+    solved_contribution_pension: Option<f64>,
+    achieved_success_rate: Option<f64>,
+    achieved_success_ci_half_width: Option<f64>,
+    converged: bool,
+    feasible: bool,
+    message: String,
+    iterations: Vec<SolveGoalIterationResponse>,
+}
+
+#[derive(Debug, Serialize)]
 struct ErrorResponse {
     error: String,
+}
+
+#[derive(Debug, Serialize)]
+struct HealthResponse {
+    status: &'static str,
 }
 
 fn build_inputs(cli: Cli) -> Result<Inputs, String> {
@@ -799,9 +884,15 @@ pub async fn run_http_server(port: u16) -> std::io::Result<()> {
         .route("/index.html", get(index_handler))
         .route("/styles.css", get(styles_handler))
         .route("/app.js", get(app_js_handler))
+        .route("/healthz", get(health_handler))
+        .route("/api/health", get(health_handler))
         .route(
             "/api/simulate",
             get(simulate_get_handler).post(simulate_post_handler),
+        )
+        .route(
+            "/api/solve-goal",
+            get(solve_goal_get_handler).post(solve_goal_post_handler),
         )
         .fallback(not_found_handler);
 
@@ -833,6 +924,10 @@ async fn app_js_handler() -> impl IntoResponse {
     ))
 }
 
+async fn health_handler() -> Response {
+    json_response(StatusCode::OK, HealthResponse { status: "ok" })
+}
+
 async fn not_found_handler() -> Response {
     error_response(StatusCode::NOT_FOUND, "Not found")
 }
@@ -843,6 +938,14 @@ async fn simulate_get_handler(Query(payload): Query<SimulatePayload>) -> Respons
 
 async fn simulate_post_handler(Json(payload): Json<SimulatePayload>) -> Response {
     simulate_handler_impl(payload).await
+}
+
+async fn solve_goal_get_handler(Query(payload): Query<SolveGoalPayload>) -> Response {
+    solve_goal_handler_impl(payload).await
+}
+
+async fn solve_goal_post_handler(Json(payload): Json<SolveGoalPayload>) -> Response {
+    solve_goal_handler_impl(payload).await
 }
 
 async fn simulate_handler_impl(payload: SimulatePayload) -> Response {
@@ -899,6 +1002,146 @@ async fn simulate_handler_impl(payload: SimulatePayload) -> Response {
         cashflow,
     );
     json_response(StatusCode::OK, response)
+}
+
+async fn solve_goal_handler_impl(payload: SolveGoalPayload) -> Response {
+    let request = match api_request_from_payload(payload.simulation.clone()) {
+        Ok(request) => request,
+        Err(msg) => return error_response(StatusCode::BAD_REQUEST, &msg),
+    };
+
+    let config = match build_goal_solve_config(&request.inputs, &payload) {
+        Ok(config) => config,
+        Err(msg) => return error_response(StatusCode::BAD_REQUEST, &msg),
+    };
+
+    let result = match solve_goal(&request.inputs, config) {
+        Ok(result) => result,
+        Err(msg) => return error_response(StatusCode::BAD_REQUEST, &msg),
+    };
+
+    json_response(StatusCode::OK, build_solve_goal_response(result))
+}
+
+fn build_goal_solve_config(
+    inputs: &Inputs,
+    payload: &SolveGoalPayload,
+) -> Result<GoalSolveConfig, String> {
+    let goal_type = payload
+        .goal_type
+        .unwrap_or(ApiGoalType::RequiredContribution);
+    let target_retirement_age = payload
+        .target_retirement_age
+        .unwrap_or(inputs.max_retirement_age);
+
+    let target_success_pct = payload
+        .target_success_threshold
+        .unwrap_or(inputs.success_threshold * 100.0);
+    if !target_success_pct.is_finite() || !(0.0..=100.0).contains(&target_success_pct) {
+        return Err("--targetSuccessThreshold must be between 0 and 100".to_string());
+    }
+
+    let default_search_max = match goal_type {
+        ApiGoalType::RequiredContribution => {
+            let base_total = inputs.isa_annual_contribution.max(0.0)
+                + inputs.taxable_annual_contribution.max(0.0)
+                + inputs.pension_annual_contribution.max(0.0);
+            (base_total.max(1.0) * 4.0).max(200_000.0)
+        }
+        ApiGoalType::MaxIncome => (inputs.target_annual_income * 2.0)
+            .max(inputs.target_annual_income + 20_000.0)
+            .max(100_000.0),
+    };
+
+    let search_min = payload.search_min.unwrap_or(0.0);
+    let search_max = payload.search_max.unwrap_or(default_search_max);
+    let tolerance = payload.tolerance.unwrap_or(100.0);
+    let max_iterations = payload.max_iterations.unwrap_or(24);
+
+    let simulations_per_iteration = payload
+        .simulations_per_iteration
+        .unwrap_or(inputs.simulations.clamp(1_000, 5_000));
+    let final_simulations = payload.final_simulations.unwrap_or(
+        simulations_per_iteration
+            .saturating_mul(2)
+            .max(simulations_per_iteration)
+            .min(20_000),
+    );
+
+    Ok(GoalSolveConfig {
+        goal_type: goal_type.into(),
+        target_retirement_age,
+        target_success_threshold: target_success_pct / 100.0,
+        search_min,
+        search_max,
+        tolerance,
+        max_iterations,
+        simulations_per_iteration,
+        final_simulations,
+    })
+}
+
+fn build_solve_goal_response(result: GoalSolveResult) -> SolveGoalResponse {
+    let solved_contribution_total = if result.goal_type == GoalType::RequiredContribution {
+        result.solved_value
+    } else {
+        None
+    };
+
+    let (solved_contribution_isa, solved_contribution_taxable, solved_contribution_pension) =
+        if let Some(ContributionAllocation {
+            isa,
+            taxable,
+            pension,
+        }) = result.solved_contributions
+        {
+            (Some(isa), Some(taxable), Some(pension))
+        } else {
+            (None, None, None)
+        };
+
+    SolveGoalResponse {
+        goal_type: result.goal_type.into(),
+        target_retirement_age: result.target_retirement_age,
+        target_success_threshold: result.target_success_threshold,
+        search_min: result.search_min,
+        search_max: result.search_max,
+        tolerance: result.tolerance,
+        max_iterations: result.max_iterations,
+        simulations_per_iteration: result.simulations_per_iteration,
+        final_simulations: result.final_simulations,
+        solved_value: result.solved_value,
+        solved_contribution_total,
+        solved_contribution_isa,
+        solved_contribution_taxable,
+        solved_contribution_pension,
+        achieved_success_rate: result.achieved_success_rate,
+        achieved_success_ci_half_width: result.achieved_success_ci_half_width,
+        converged: result.converged,
+        feasible: result.feasible,
+        message: result.message,
+        iterations: result
+            .iterations
+            .into_iter()
+            .map(
+                |GoalSolveIteration {
+                     iteration,
+                     lower_bound,
+                     upper_bound,
+                     candidate_value,
+                     success_rate,
+                     success_ci_half_width,
+                 }| SolveGoalIterationResponse {
+                    iteration,
+                    lower_bound,
+                    upper_bound,
+                    candidate_value,
+                    success_rate,
+                    success_ci_half_width,
+                },
+            )
+            .collect(),
+    }
 }
 
 fn with_cache_control<R: IntoResponse>(response: R) -> Response {
@@ -1452,6 +1695,105 @@ mod tests {
         assert!(json.contains("\"selectedRetirementAge\""));
         assert!(json.contains("\"bestRetirementAge\""));
         assert!(json.contains("\"medianRetirementPot\""));
+    }
+
+    #[test]
+    fn build_goal_solve_config_defaults_from_inputs() {
+        let mut cli = sample_cli();
+        cli.success_threshold = 93.0;
+        cli.simulations = 1800;
+        let inputs = build_inputs(cli).expect("valid inputs");
+
+        let payload = SolveGoalPayload {
+            simulation: SimulatePayload::default(),
+            goal_type: Some(ApiGoalType::MaxIncome),
+            target_retirement_age: Some(65),
+            ..SolveGoalPayload::default()
+        };
+
+        let config = build_goal_solve_config(&inputs, &payload).expect("config should build");
+        assert_eq!(config.goal_type, GoalType::MaxIncome);
+        assert_eq!(config.target_retirement_age, 65);
+        assert_approx(config.target_success_threshold, 0.93);
+        assert_eq!(config.simulations_per_iteration, 1800);
+        assert!(config.search_max > config.search_min);
+    }
+
+    #[test]
+    fn build_goal_solve_config_rejects_invalid_threshold() {
+        let inputs = build_inputs(sample_cli()).expect("valid inputs");
+        let payload = SolveGoalPayload {
+            simulation: SimulatePayload::default(),
+            target_success_threshold: Some(120.0),
+            ..SolveGoalPayload::default()
+        };
+
+        let err =
+            build_goal_solve_config(&inputs, &payload).expect_err("must reject bad threshold");
+        assert!(err.contains("--targetSuccessThreshold"));
+    }
+
+    #[test]
+    fn solve_goal_response_serialization_contains_expected_fields() {
+        let mut cli = sample_cli();
+        cli.current_age = 30;
+        cli.max_age = 31;
+        cli.horizon_age = 32;
+        cli.simulations = 1;
+        cli.seed = 7;
+        cli.isa_start = 0.0;
+        cli.taxable_start = 0.0;
+        cli.taxable_cost_basis_start = 0.0;
+        cli.pension_start = 0.0;
+        cli.cash_start = 0.0;
+        cli.isa_annual_contribution = 1.0;
+        cli.taxable_annual_contribution = 0.0;
+        cli.pension_annual_contribution = 0.0;
+        cli.target_annual_income = 100.0;
+        cli.isa_growth_rate = 0.0;
+        cli.pension_growth_rate = 0.0;
+        cli.taxable_growth_rate = Some(0.0);
+        cli.isa_return_volatility = 0.0;
+        cli.taxable_return_volatility = Some(0.0);
+        cli.pension_return_volatility = 0.0;
+        cli.inflation_rate = 0.0;
+        cli.inflation_volatility = 0.0;
+        cli.taxable_return_tax_drag = 0.0;
+        cli.capital_gains_tax_rate = 0.0;
+        cli.capital_gains_allowance = 0.0;
+        cli.pension_tax_mode = CliPensionTaxMode::FlatRate;
+        cli.pension_income_tax_rate = 0.0;
+        cli.state_pension_start_age = 200;
+        cli.state_pension_annual_income = 0.0;
+        cli.bad_year_threshold = -100.0;
+        cli.good_year_threshold = 100.0;
+        cli.bad_year_cut = 0.0;
+        cli.good_year_raise = 0.0;
+        cli.min_income_floor = 100.0;
+        cli.max_income_ceiling = 100.0;
+        cli.good_year_extra_buffer_withdrawal = 0.0;
+        cli.cash_growth_rate = 0.0;
+
+        let inputs = build_inputs(cli).expect("valid inputs");
+        let config = GoalSolveConfig {
+            goal_type: GoalType::RequiredContribution,
+            target_retirement_age: 31,
+            target_success_threshold: 1.0,
+            search_min: 0.0,
+            search_max: 200.0,
+            tolerance: 1.0,
+            max_iterations: 24,
+            simulations_per_iteration: 1,
+            final_simulations: 1,
+        };
+        let result = solve_goal(&inputs, config).expect("solver should run");
+        let response = build_solve_goal_response(result);
+        let json = serde_json::to_string(&response).expect("response should serialize");
+        assert!(json.contains("\"goalType\""));
+        assert!(json.contains("\"targetRetirementAge\""));
+        assert!(json.contains("\"solvedValue\""));
+        assert!(json.contains("\"iterations\""));
+        assert!(json.contains("\"achievedSuccessRate\""));
     }
 
     #[test]

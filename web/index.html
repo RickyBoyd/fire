@@ -165,14 +165,76 @@
                   <label>Simulations per Age <input name="simulations" type="number" value="3000" min="100" step="100" title="Number of Monte Carlo runs per retirement age candidate." /></label>
                   <label>Success Threshold (%) <input name="successThreshold" type="number" value="90" min="0" max="100" step="0.1" title="Required success probability to count an age as feasible." /></label>
                   <label class="advanced-only">Seed <input name="seed" type="number" value="42" min="1" step="1" title="Random seed for reproducible Monte Carlo results." /></label>
+
+                  <label>Goal Type
+                    <select name="goalType" title="Choose what the solver should optimize for at the selected retirement age.">
+                      <option value="required-contribution">Required Contribution</option>
+                      <option value="max-income">Max Sustainable Income</option>
+                    </select>
+                  </label>
+                  <label>Goal Target Retirement Age
+                    <input name="goalTargetRetirementAge" type="number" value="57" min="18" step="1" title="Retirement age the goal solver evaluates." />
+                  </label>
+                  <label>Goal Success Threshold (%)
+                    <input name="goalTargetSuccessThreshold" type="number" value="90" min="0" max="100" step="0.1" title="Target success probability for the solver objective." />
+                  </label>
+                  <label>Goal Search Min (£)
+                    <input name="goalSearchMin" type="number" value="0" min="0" step="100" title="Lower bound for solver search. For required contribution: annual amount. For max income: annual spending." />
+                  </label>
+                  <label>Goal Search Max (£)
+                    <input name="goalSearchMax" type="number" value="200000" min="1" step="100" title="Upper bound for solver search. Increase if solution hits this boundary." />
+                  </label>
+                  <label>Goal Tolerance (£)
+                    <input name="goalTolerance" type="number" value="100" min="1" step="1" title="Stops search when bounds are within this amount." />
+                  </label>
+                  <label>Goal Max Iterations
+                    <input name="goalMaxIterations" type="number" value="24" min="1" step="1" title="Maximum bisection iterations for the goal solver." />
+                  </label>
+                  <label>Goal Sims per Iteration
+                    <input name="goalSimulationsPerIteration" type="number" value="2000" min="1" step="100" title="Monte Carlo runs per candidate point while searching." />
+                  </label>
+                  <label>Goal Final Sims
+                    <input name="goalFinalSimulations" type="number" value="5000" min="1" step="100" title="Monte Carlo runs for final verification at the solved value." />
+                  </label>
                 </fieldset>
               </details>
             </div>
 
             <div class="action-row">
               <button type="submit" id="run-btn">Run Simulation</button>
+              <button type="button" id="solve-btn" class="secondary">Solve Goal</button>
               <button type="button" id="csv-btn" disabled>Export Age Sweep CSV</button>
               <p id="run-meta"></p>
+            </div>
+
+            <div class="solver-output">
+              <p id="solve-meta">Goal solver ready. Configure bounds and click Solve Goal.</p>
+              <p id="solve-explainer" class="solver-explainer">
+                This section explains the solved value and what input will be changed if you apply it.
+              </p>
+              <div id="solve-summary" class="cards"></div>
+              <div class="solver-actions">
+                <button type="button" id="apply-solved-btn" class="secondary" disabled>Apply Solved Value To Inputs</button>
+              </div>
+              <div class="table-wrap solver-table-wrap">
+                <table id="solve-iterations-table">
+                  <thead>
+                    <tr>
+                      <th>Iter</th>
+                      <th>Lower Bound (£)</th>
+                      <th>Upper Bound (£)</th>
+                      <th>Candidate (£)</th>
+                      <th>Success %</th>
+                      <th>95% CI Half-Width</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td colspan="6">No solver run yet.</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
             </div>
 
             <div class="preset-row">

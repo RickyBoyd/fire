@@ -147,7 +147,10 @@
     "ukAllowanceTaperStart",
     "ukAllowanceTaperEnd",
     "targetIncome",
-    "mortgageAnnualPayment"
+    "mortgageAnnualPayment",
+    "goalSearchMin",
+    "goalSearchMax",
+    "goalTolerance"
   ]);
 
   const PERCENT_FIELDS = new Set([
@@ -178,7 +181,8 @@
     "gkUpperGuardrail",
     "vpwRealReturn",
     "floorUpsideCapture",
-    "successThreshold"
+    "successThreshold",
+    "goalTargetSuccessThreshold"
   ]);
 
   const AGE_FIELDS = new Set([
@@ -188,16 +192,24 @@
     "horizonAge",
     "statePensionStartAge",
     "coastRetirementAge",
-    "mortgageEndAge"
+    "mortgageEndAge",
+    "goalTargetRetirementAge"
   ]);
 
-  const COUNT_FIELDS = new Set(["simulations", "seed"]);
+  const COUNT_FIELDS = new Set([
+    "simulations",
+    "seed",
+    "goalMaxIterations",
+    "goalSimulationsPerIteration",
+    "goalFinalSimulations"
+  ]);
   const YEAR_FIELDS = new Set(["bucketYearsTarget"]);
   const RATIO_FIELDS = new Set(["correlation"]);
 
   const form = document.getElementById("config-form");
   const inputModeSelect = document.getElementById("input-mode");
   const runBtn = document.getElementById("run-btn");
+  const solveBtn = document.getElementById("solve-btn");
   const csvBtn = document.getElementById("csv-btn");
   const inlineValidation = document.getElementById("inline-validation");
   const presetNameInput = document.getElementById("preset-name");
@@ -209,6 +221,14 @@
   const presetMeta = document.getElementById("preset-meta");
   const summaryCards = document.getElementById("summary-cards");
   const runMeta = document.getElementById("run-meta");
+  const solveMeta = document.getElementById("solve-meta");
+  const solveExplainer = document.getElementById("solve-explainer");
+  const solveSummary = document.getElementById("solve-summary");
+  const solveIterationsBody = document.querySelector(
+    "#solve-iterations-table tbody"
+  );
+  const applySolvedBtn = document.getElementById("apply-solved-btn");
+  const solverOutput = document.querySelector(".solver-output");
   const tableBody = document.querySelector("#age-table tbody");
   const cashflowTableBody = document.querySelector("#cashflow-table tbody");
   const cashflowMeta = document.getElementById("cashflow-meta");
@@ -247,6 +267,8 @@
   let successChart = null;
   let autosaveTimer = null;
   let isRunning = false;
+  let isSolving = false;
+  let lastSolveResult = null;
   let hasClientErrors = false;
   const fieldNames = collectFieldNames();
   const defaultFormValues = serializeForm();
@@ -264,6 +286,18 @@
     event.preventDefault();
     runSimulation();
   });
+
+  if (solveBtn) {
+    solveBtn.addEventListener("click", () => {
+      runGoalSolve();
+    });
+  }
+
+  if (applySolvedBtn) {
+    applySolvedBtn.addEventListener("click", () => {
+      applySolvedValueToInputs();
+    });
+  }
 
   if (inputModeSelect) {
     inputModeSelect.addEventListener("change", () => {
@@ -462,6 +496,250 @@
     } finally {
       isRunning = false;
       updateRunButtonState();
+    }
+  }
+
+  async function runGoalSolve() {
+    if (currentInputMode() === "basic") {
+      if (solveMeta) {
+        solveMeta.className = "warn";
+        solveMeta.textContent = "Goal solver is available in Advanced input mode.";
+      }
+      return;
+    }
+
+    refreshDynamicUI();
+    if (hasClientErrors) {
+      if (solveMeta) {
+        solveMeta.className = "warn";
+        solveMeta.textContent = "Fix highlighted input errors before solving.";
+      }
+      return;
+    }
+
+    persistFormState();
+    isSolving = true;
+    updateRunButtonState();
+    if (solveMeta) {
+      solveMeta.className = "";
+      solveMeta.textContent = "Solving goal via Rust API...";
+    }
+
+    try {
+      const params = buildApiParams();
+      const payloadBody = buildGoalSolvePayload(buildApiPayload(params));
+      const started = performance.now();
+      const response = await fetch("/api/solve-goal", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(payloadBody)
+      });
+      const payload = await response.json();
+
+      if (!response.ok) {
+        throw new Error(payload.error || "Goal solve failed");
+      }
+
+      lastSolveResult = payload;
+      renderGoalSolve(payload);
+
+      if (solveMeta) {
+        const seconds = (performance.now() - started) / 1000;
+        solveMeta.className = "";
+        solveMeta.textContent = `Goal solve completed in ${seconds.toFixed(2)}s.`;
+      }
+    } catch (error) {
+      lastSolveResult = null;
+      if (applySolvedBtn) {
+        applySolvedBtn.disabled = true;
+      }
+      if (solveMeta) {
+        solveMeta.className = "warn";
+        solveMeta.textContent =
+          error instanceof Error ? error.message : "Goal solve failed.";
+      }
+    } finally {
+      isSolving = false;
+      updateRunButtonState();
+    }
+  }
+
+  function renderGoalSolve(result) {
+    if (!solveSummary || !solveIterationsBody) {
+      return;
+    }
+
+    const isMaxIncome = String(result.goalType || "") === "max-income";
+    const goalType = isMaxIncome
+      ? "Max Sustainable Income"
+      : "Required Contribution";
+    const solvedValue = Number(result.solvedValue);
+    const achieved = Number(result.achievedSuccessRate);
+    const achievedCi = Number(result.achievedSuccessCiHalfWidth);
+    const targetThreshold = Number(result.targetSuccessThreshold);
+    const targetRetirementAge = Number(result.targetRetirementAge);
+    const isFeasible = Boolean(result.feasible);
+    const isConverged = Boolean(result.converged);
+    const canApply = isFeasible && Number.isFinite(solvedValue);
+
+    const solvedValueLabel = isMaxIncome
+      ? "Solved Annual Target Income"
+      : "Solved Annual Contribution (Total)";
+    const interpretation = isMaxIncome
+      ? Number.isFinite(solvedValue)
+        ? `Interpretation: for retiring at age ${Math.round(
+            targetRetirementAge
+          )}, this is the highest annual income in today's money that still meets your success target.`
+        : `Interpretation: no annual income in the selected bounds met your target for retiring at age ${Math.round(
+            targetRetirementAge
+          )}.`
+      : Number.isFinite(solvedValue)
+        ? `Interpretation: for retiring at age ${Math.round(
+            targetRetirementAge
+          )}, this is the minimum total annual contribution needed to meet your success target.`
+        : `Interpretation: no contribution amount in the selected bounds met your target for retiring at age ${Math.round(
+            targetRetirementAge
+          )}.`;
+
+    const cards = [
+      ["Goal Type", goalType],
+      [
+        "Status",
+        isFeasible
+          ? isConverged
+            ? "Solved"
+            : "Estimated (hit max iterations)"
+          : "No solution in bounds"
+      ],
+      [
+        solvedValueLabel,
+        Number.isFinite(solvedValue) ? money(solvedValue) : "No solution"
+      ],
+      [
+        "Achieved Success",
+        Number.isFinite(achieved)
+          ? `${(achieved * 100).toFixed(1)}%` +
+            (Number.isFinite(achievedCi)
+              ? ` ± ${(achievedCi * 100).toFixed(1)}%`
+              : "")
+          : "-"
+      ],
+      [
+        "Target Success",
+        Number.isFinite(targetThreshold)
+          ? `${(targetThreshold * 100).toFixed(1)}%`
+          : "-"
+      ],
+      ["Message", String(result.message || "")]
+    ];
+
+    if (String(result.goalType || "") === "required-contribution") {
+      const isa = Number(result.solvedContributionIsa);
+      const taxable = Number(result.solvedContributionTaxable);
+      const pension = Number(result.solvedContributionPension);
+      cards.push([
+        "Solved ISA / Taxable / Pension",
+        `${money(isa)} / ${money(taxable)} / ${money(pension)}`
+      ]);
+    }
+
+    solveSummary.innerHTML = cards
+      .map(
+        ([title, value]) => `<article class="card"><h3>${title}</h3><p>${value}</p></article>`
+      )
+      .join("");
+
+    if (solveExplainer) {
+      solveExplainer.textContent = interpretation;
+    }
+    if (applySolvedBtn) {
+      applySolvedBtn.disabled = !canApply;
+      applySolvedBtn.textContent = isMaxIncome
+        ? "Apply Solved Income To Target Income"
+        : "Apply Solved Contributions To Contribution Inputs";
+    }
+
+    const iterations = Array.isArray(result.iterations) ? result.iterations : [];
+    if (iterations.length === 0) {
+      solveIterationsBody.innerHTML =
+        '<tr><td colspan="6">No bisection iterations were needed for this solve.</td></tr>';
+      return;
+    }
+
+    solveIterationsBody.innerHTML = iterations
+      .map((row) => {
+        const lower = Number(row.lowerBound);
+        const upper = Number(row.upperBound);
+        const candidate = Number(row.candidateValue);
+        const success = Number(row.successRate);
+        const ci = Number(row.successCiHalfWidth);
+        return `<tr>
+          <td>${Math.round(Number(row.iteration || 0))}</td>
+          <td>${money(lower)}</td>
+          <td>${money(upper)}</td>
+          <td>${money(candidate)}</td>
+          <td>${(success * 100).toFixed(2)}%</td>
+          <td>± ${(ci * 100).toFixed(2)}%</td>
+        </tr>`;
+      })
+      .join("");
+  }
+
+  function applySolvedValueToInputs() {
+    if (!lastSolveResult) {
+      return;
+    }
+
+    const isMaxIncome = String(lastSolveResult.goalType || "") === "max-income";
+    const solvedValue = Number(lastSolveResult.solvedValue);
+    if (!Number.isFinite(solvedValue)) {
+      if (solveMeta) {
+        solveMeta.className = "warn";
+        solveMeta.textContent = "No solved value available to apply.";
+      }
+      return;
+    }
+
+    if (isMaxIncome) {
+      setNumericInputValue("targetIncome", solvedValue);
+      if (solveMeta) {
+        solveMeta.className = "";
+        solveMeta.textContent = "Applied solved income to Target Income.";
+      }
+    } else {
+      const isa = Number(lastSolveResult.solvedContributionIsa);
+      const taxable = Number(lastSolveResult.solvedContributionTaxable);
+      const pension = Number(lastSolveResult.solvedContributionPension);
+      if (!Number.isFinite(isa) || !Number.isFinite(taxable) || !Number.isFinite(pension)) {
+        if (solveMeta) {
+          solveMeta.className = "warn";
+          solveMeta.textContent = "Solved contribution split is unavailable to apply.";
+        }
+        return;
+      }
+      setNumericInputValue("isaContribution", isa);
+      setNumericInputValue("taxableContribution", taxable);
+      setNumericInputValue("pensionContribution", pension);
+      if (solveMeta) {
+        solveMeta.className = "";
+        solveMeta.textContent =
+          "Applied solved contribution split to ISA/Taxable/Pension contribution inputs.";
+      }
+    }
+
+    persistFormState();
+    refreshDynamicUI();
+  }
+
+  function setNumericInputValue(name, value) {
+    const field = form.elements.namedItem(name);
+    if (!field || field instanceof RadioNodeList) {
+      return;
+    }
+    if (field instanceof HTMLInputElement || field instanceof HTMLSelectElement) {
+      field.value = Number.isFinite(value) ? String(Math.round(value * 100) / 100) : "";
     }
   }
 
@@ -889,6 +1167,35 @@
         payload[key] = text;
       }
     }
+    return payload;
+  }
+
+  function buildGoalSolvePayload(basePayload) {
+    const payload = { ...basePayload };
+    payload.goalType = selectedValue("goalType") || "required-contribution";
+
+    const numericFields = [
+      ["targetRetirementAge", "goalTargetRetirementAge"],
+      ["targetSuccessThreshold", "goalTargetSuccessThreshold"],
+      ["searchMin", "goalSearchMin"],
+      ["searchMax", "goalSearchMax"],
+      ["tolerance", "goalTolerance"],
+      ["maxIterations", "goalMaxIterations"],
+      ["simulationsPerIteration", "goalSimulationsPerIteration"],
+      ["finalSimulations", "goalFinalSimulations"]
+    ];
+
+    for (const [apiKey, fieldName] of numericFields) {
+      const raw = selectedValue(fieldName).trim();
+      if (raw === "") {
+        continue;
+      }
+      const value = Number(raw);
+      if (Number.isFinite(value)) {
+        payload[apiKey] = value;
+      }
+    }
+
     return payload;
   }
 
@@ -1344,6 +1651,16 @@
       el.classList.toggle("is-hidden", mode === "basic");
     });
 
+    if (solveBtn) {
+      solveBtn.classList.toggle("is-hidden", mode === "basic");
+    }
+    if (solverOutput) {
+      solverOutput.classList.toggle("is-hidden", mode === "basic");
+    }
+    if (mode === "basic" && applySolvedBtn) {
+      applySolvedBtn.disabled = true;
+    }
+
     document.querySelectorAll(".config-section").forEach((section) => {
       const visibleControls = Array.from(section.querySelectorAll("label")).filter(
         (label) => !label.classList.contains("is-hidden")
@@ -1541,6 +1858,14 @@
     const coastAgeRaw = selectedValue("coastRetirementAge");
     const coastAge = coastAgeRaw === "" ? null : Number(coastAgeRaw);
     const strategy = mode === "basic" ? "guardrails" : selectedValue("withdrawalPolicy");
+    const goalTargetRetirementAge = parseNumber("goalTargetRetirementAge");
+    const goalTargetSuccessThreshold = parseNumber("goalTargetSuccessThreshold");
+    const goalSearchMin = parseNumber("goalSearchMin");
+    const goalSearchMax = parseNumber("goalSearchMax");
+    const goalTolerance = parseNumber("goalTolerance");
+    const goalMaxIterations = parseNumber("goalMaxIterations");
+    const goalSimsPerIteration = parseNumber("goalSimulationsPerIteration");
+    const goalFinalSims = parseNumber("goalFinalSimulations");
 
     if (maxAge < currentAge) {
       errors.push("Max retirement age must be greater than or equal to current age.");
@@ -1579,6 +1904,38 @@
       }
       if (coastAge >= horizonAge) {
         errors.push("Coast retirement age must be below horizon age.");
+      }
+    }
+    if (mode === "advanced") {
+      if (goalTargetRetirementAge < currentAge) {
+        errors.push("Goal target retirement age must be at least current age.");
+      }
+      if (goalTargetRetirementAge >= horizonAge) {
+        errors.push("Goal target retirement age must be below horizon age.");
+      }
+      if (
+        !Number.isFinite(goalTargetSuccessThreshold) ||
+        goalTargetSuccessThreshold < 0 ||
+        goalTargetSuccessThreshold > 100
+      ) {
+        errors.push("Goal success threshold must be between 0 and 100.");
+      }
+      if (!Number.isFinite(goalSearchMin) || !Number.isFinite(goalSearchMax)) {
+        errors.push("Goal search bounds must be valid numbers.");
+      } else if (goalSearchMax <= goalSearchMin) {
+        errors.push("Goal search max must be greater than goal search min.");
+      }
+      if (!Number.isFinite(goalTolerance) || goalTolerance <= 0) {
+        errors.push("Goal tolerance must be greater than zero.");
+      }
+      if (!Number.isFinite(goalMaxIterations) || goalMaxIterations < 1) {
+        errors.push("Goal max iterations must be at least 1.");
+      }
+      if (!Number.isFinite(goalSimsPerIteration) || goalSimsPerIteration < 1) {
+        errors.push("Goal simulations per iteration must be at least 1.");
+      }
+      if (!Number.isFinite(goalFinalSims) || goalFinalSims < 1) {
+        errors.push("Goal final simulations must be at least 1.");
       }
     }
 
@@ -1637,7 +1994,14 @@
   }
 
   function updateRunButtonState() {
-    runBtn.disabled = isRunning || hasClientErrors;
+    const disabled = isRunning || isSolving || hasClientErrors;
+    runBtn.disabled = disabled;
+    if (solveBtn) {
+      solveBtn.disabled = disabled;
+    }
+    if (applySolvedBtn && (isRunning || isSolving)) {
+      applySolvedBtn.disabled = true;
+    }
   }
 
   function selectedValue(name) {

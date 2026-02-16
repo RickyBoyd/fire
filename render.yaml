@@ -5,5 +5,5 @@ services:
     plan: free
     buildCommand: cargo build --release
     startCommand: ./target/release/fire serve $PORT
-    healthCheckPath: /
+    healthCheckPath: /healthz
     autoDeploy: true

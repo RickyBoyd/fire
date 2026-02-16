@@ -131,6 +131,10 @@ pub fn run_coast_model(inputs: &Inputs, retirement_age: u32) -> ModelResult {
     build_model_result(age_results, inputs.success_threshold)
 }
 
+pub fn run_retirement_age_evaluation(inputs: &Inputs, retirement_age: u32) -> AgeResult {
+    evaluate_age_candidate(inputs, retirement_age, retirement_age, retirement_age)
+}
+
 struct YearlyAccumulator {
     ages: Vec<u32>,
     contribution_isa: Vec<Vec<f64>>,
