@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FIRE Simulator</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="bg-layer"></div>
+  <main class="app-shell">
+    <header class="hero">
+      <p class="kicker">Retirement Planner</p>
+      <h1>Monte Carlo FIRE Simulator</h1>
+      <p class="hero-copy">Model ISA, taxable brokerage, pension, dynamic spending, and CGT-aware withdrawals.</p>
+    </header>
+
+    <section class="panel controls">
+      <form id="config-form" novalidate>
+        <div class="ux-bar">
+          <label>Input Mode
+            <select id="input-mode" title="Basic mode shows core planning inputs only. Advanced mode reveals full controls.">
+              <option value="basic">Basic</option>
+              <option value="advanced">Advanced</option>
+            </select>
+          </label>
+          <div class="quick-presets" role="group" aria-label="Quick Presets">
+            <span>Quick Presets</span>
+            <button type="button" class="secondary quick-preset" data-quick-preset="conservative">Conservative</button>
+            <button type="button" class="secondary quick-preset" data-quick-preset="balanced">Balanced</button>
+            <button type="button" class="secondary quick-preset" data-quick-preset="aggressive">Aggressive</button>
+            <button type="button" class="secondary quick-preset" data-quick-preset="coastfire">CoastFIRE Setup</button>
+          </div>
+        </div>
+
+        <div id="inline-validation" class="inline-validation" aria-live="polite"></div>
+
+        <div class="controls-layout">
+          <div class="controls-main">
+            <div class="accordion-grid">
+              <details class="config-section" data-section-level="basic" open>
+                <summary>Ages</summary>
+                <fieldset class="section-body">
+                  <label>Current Age <input name="currentAge" type="number" value="30" min="18" title="Your current age in years." /></label>
+                  <label>Pension Access Age <input name="pensionAccessAge" type="number" value="57" min="18" title="Earliest age you can draw from pension." /></label>
+                  <label>Max Retirement Age <input name="maxAge" type="number" value="70" min="18" title="Latest retirement age the simulator will test." /></label>
+                  <label>Horizon Age <input name="horizonAge" type="number" value="90" min="19" title="Age until which retirement income must be sustained." /></label>
+                </fieldset>
+              </details>
+
+              <details class="config-section" data-section-level="basic" open>
+                <summary>Starting Pots</summary>
+                <fieldset class="section-body">
+                  <label>ISA (£) <input name="isaStart" type="number" value="100000" min="0" step="100" title="Current value of your ISA account." /></label>
+                  <label>Taxable (£) <input name="taxableStart" type="number" value="15000" min="0" step="100" title="Current value of your non-ISA taxable investment account." /></label>
+                  <label class="advanced-only">Taxable Cost Basis (£) <input name="taxableBasisStart" type="number" value="12000" min="0" step="100" title="Original purchase cost of taxable holdings, used for CGT calculations." /></label>
+                  <label>Pension (£) <input name="pensionStart" type="number" value="200000" min="0" step="100" title="Current value of your pension pot." /></label>
+                  <label>Cash Buffer (£) <input name="cashStart" type="number" value="0" min="0" step="100" title="Cash available at retirement start before selling investments." /></label>
+                </fieldset>
+              </details>
+
+              <details class="config-section" data-section-level="basic" open>
+                <summary>Contributions and Tax</summary>
+                <fieldset class="section-body">
+                  <label>ISA Annual Contribution (£) <input name="isaContribution" type="number" value="30000" min="0" step="100" title="Amount you plan to add to ISA each year before applying ISA limit." /></label>
+                  <label>ISA Annual Limit (£) <input name="isaLimit" type="number" value="20000" min="0" step="100" title="Maximum amount allowed into ISA per year; excess is redirected to taxable account." /></label>
+                  <label>Taxable Annual Contribution (£) <input name="taxableContribution" type="number" value="5000" min="0" step="100" title="Planned annual contribution directly into taxable account." /></label>
+                  <label>Pension Annual Contribution (£) <input name="pensionContribution" type="number" value="0" min="0" step="100" title="Planned annual pension contribution before retirement." /></label>
+                  <label>Contribution Growth (%/yr) <input name="contributionGrowth" type="number" value="0" step="0.1" title="Annual growth applied to ISA, taxable, and pension contributions before retirement, e.g. to model pay rises." /></label>
+
+                  <label class="advanced-only">CGT Rate (%) <input name="cgtRate" type="number" value="20" min="0" max="100" step="0.1" title="Capital gains tax rate applied to realized taxable gains above allowance." /></label>
+                  <label class="advanced-only">CGT Allowance (£) <input name="cgtAllowance" type="number" value="3000" min="0" step="100" title="Annual gains allowance before capital gains tax is charged." /></label>
+                  <label class="advanced-only">Pension Tax Mode
+                    <select name="pensionTaxMode" title="Choose UK progressive tax bands (realistic default) or flat-rate pension tax.">
+                      <option value="uk-bands">UK Bands</option>
+                      <option value="flat-rate">Flat Rate</option>
+                    </select>
+                  </label>
+                  <label class="advanced-only" data-show-when="pensionTaxMode=flat-rate">Pension Flat Tax Rate (%) <input name="pensionIncomeTaxRate" type="number" value="20" min="0" max="100" step="0.1" title="Used only when Pension Tax Mode is Flat Rate." /></label>
+                  <label class="advanced-only">State Pension Start Age <input name="statePensionStartAge" type="number" value="67" min="0" step="1" title="Age when state pension income starts." /></label>
+                  <label class="advanced-only">State Pension Income (£ real) <input name="statePensionIncome" type="number" value="0" min="0" step="100" title="Annual state pension income in today's money, inflation-adjusted by the model." /></label>
+                  <label class="advanced-only" data-show-when="pensionTaxMode=uk-bands">UK Personal Allowance (£ real) <input name="ukPersonalAllowance" type="number" value="12570" min="0" step="10" title="Tax-free annual income allowance in today's money." /></label>
+                  <label class="advanced-only" data-show-when="pensionTaxMode=uk-bands">UK Basic Rate Limit (£ real) <input name="ukBasicRateLimit" type="number" value="50270" min="0" step="10" title="Upper income bound of the UK basic tax band in today's money." /></label>
+                  <label class="advanced-only" data-show-when="pensionTaxMode=uk-bands">UK Higher Rate Limit (£ real) <input name="ukHigherRateLimit" type="number" value="125140" min="0" step="10" title="Upper income bound of the UK higher tax band in today's money." /></label>
+                  <label class="advanced-only" data-show-when="pensionTaxMode=uk-bands">UK Basic Rate (%) <input name="ukBasicRate" type="number" value="20" min="0" max="100" step="0.1" title="UK basic income tax rate." /></label>
+                  <label class="advanced-only" data-show-when="pensionTaxMode=uk-bands">UK Higher Rate (%) <input name="ukHigherRate" type="number" value="40" min="0" max="100" step="0.1" title="UK higher income tax rate." /></label>
+                  <label class="advanced-only" data-show-when="pensionTaxMode=uk-bands">UK Additional Rate (%) <input name="ukAdditionalRate" type="number" value="45" min="0" max="100" step="0.1" title="UK additional income tax rate." /></label>
+                  <label class="advanced-only" data-show-when="pensionTaxMode=uk-bands">Allowance Taper Start (£ real) <input name="ukAllowanceTaperStart" type="number" value="100000" min="0" step="10" title="Income where personal allowance taper starts (today's money)." /></label>
+                  <label class="advanced-only" data-show-when="pensionTaxMode=uk-bands">Allowance Taper End (£ real) <input name="ukAllowanceTaperEnd" type="number" value="125140" min="0" step="10" title="Income where personal allowance fully tapers away (today's money)." /></label>
+                </fieldset>
+              </details>
+
+              <details class="config-section" data-section-level="advanced">
+                <summary>Market and Inflation</summary>
+                <fieldset class="section-body">
+                  <label>ISA Return Mean (%) <input name="isaMean" type="number" value="8" step="0.1" title="Expected long-run annual ISA return (nominal)." /></label>
+                  <label class="advanced-only">ISA Volatility (%) <input name="isaVol" type="number" value="12" min="0" step="0.1" title="Year-to-year variation in ISA returns." /></label>
+                  <label>Taxable Return Mean (%) <input name="taxableMean" type="number" value="8" step="0.1" title="Expected long-run annual taxable account return (nominal)." /></label>
+                  <label class="advanced-only">Taxable Volatility (%) <input name="taxableVol" type="number" value="12" min="0" step="0.1" title="Year-to-year variation in taxable account returns." /></label>
+                  <label class="advanced-only">Taxable Return Tax Drag (%) <input name="taxableTaxDrag" type="number" value="1" min="0" max="100" step="0.1" title="Annual drag on taxable returns from ongoing taxes (e.g. dividends/interest)." /></label>
+                  <label>Pension Return Mean (%) <input name="pensionMean" type="number" value="8" step="0.1" title="Expected long-run annual pension return (nominal)." /></label>
+                  <label class="advanced-only">Pension Volatility (%) <input name="pensionVol" type="number" value="12" min="0" step="0.1" title="Year-to-year variation in pension returns." /></label>
+                  <label class="advanced-only">ISA/Pension Correlation <input name="correlation" type="number" value="0.8" min="-1" max="1" step="0.01" title="How similarly ISA and pension returns move each year." /></label>
+                  <label>Inflation Mean (%) <input name="inflationMean" type="number" value="2.5" step="0.1" title="Expected long-run annual inflation." /></label>
+                  <label class="advanced-only">Inflation Volatility (%) <input name="inflationVol" type="number" value="1" min="0" step="0.1" title="Year-to-year variation in inflation." /></label>
+                </fieldset>
+              </details>
+
+              <details class="config-section" data-section-level="basic" open>
+                <summary>Withdrawal Policy</summary>
+                <fieldset class="section-body">
+                  <label>Target Income (£ real) <input name="targetIncome" type="number" value="50000" min="0" step="100" title="Desired annual spending in today's money during retirement." /></label>
+                  <label>Mortgage Payment (£ real) <input name="mortgageAnnualPayment" type="number" value="0" min="0" step="100" title="Annual mortgage payment in today's money; this is added to required retirement spending while mortgage is active." /></label>
+                  <label>Mortgage End Age <input name="mortgageEndAge" type="number" min="0" step="1" placeholder="Required if mortgage > 0" title="Age when mortgage payments stop. Required spending drops by this amount from this age onward." /></label>
+                  <label>Withdrawal Strategy
+                    <select name="withdrawalPolicy" title="Select how annual spending is adjusted through retirement.">
+                      <option value="guardrails">Dynamic Guardrails</option>
+                      <option value="guyton-klinger">Guyton-Klinger</option>
+                      <option value="vpw">VPW (Variable Percentage Withdrawal)</option>
+                      <option value="floor-upside">Floor + Upside</option>
+                      <option value="bucket">Bucket (Cash Reserve)</option>
+                    </select>
+                  </label>
+                  <label data-show-when="withdrawalPolicy=guyton-klinger">GK Lower Guardrail (%) <input name="gkLowerGuardrail" type="number" value="80" min="1" step="0.1" title="Guyton-Klinger lower guardrail as percent of initial withdrawal rate; below this, spending may be increased in good markets." /></label>
+                  <label data-show-when="withdrawalPolicy=guyton-klinger">GK Upper Guardrail (%) <input name="gkUpperGuardrail" type="number" value="120" min="1" step="0.1" title="Guyton-Klinger upper guardrail as percent of initial withdrawal rate; above this, spending may be cut in bad markets." /></label>
+                  <label data-show-when="withdrawalPolicy=vpw">VPW Expected Real Return (%) <input name="vpwRealReturn" type="number" value="3.5" step="0.1" title="Expected real return assumption used by VPW to compute annual withdrawal percentages." /></label>
+                  <label data-show-when="withdrawalPolicy=floor-upside">Floor + Upside Capture (%) <input name="floorUpsideCapture" type="number" value="50" min="0" step="0.1" title="For Floor+Upside strategy, percent of positive real return translated into spending growth." /></label>
+                  <label data-show-when="withdrawalPolicy=bucket">Bucket Cash Target (Years) <input name="bucketYearsTarget" type="number" value="2" min="0" step="0.1" title="For Bucket strategy, target cash reserve measured in years of planned spending." /></label>
+                  <label class="advanced-only">Bad Year Threshold (%) <input name="badThreshold" type="number" value="-5" step="0.1" title="If previous real return is below this, spending is reduced next year." /></label>
+                  <label class="advanced-only">Good Year Threshold (%) <input name="goodThreshold" type="number" value="10" step="0.1" title="If previous real return is above this, spending is increased next year." /></label>
+                  <label class="advanced-only">Bad Year Cut (%) <input name="badCut" type="number" value="10" min="0" max="100" step="0.1" title="Percent reduction applied to spending after a bad year." /></label>
+                  <label class="advanced-only">Good Year Raise (%) <input name="goodRaise" type="number" value="5" min="0" step="0.1" title="Percent increase applied to spending after a good year." /></label>
+                  <label>Min Income Floor (%) <input name="minFloor" type="number" value="80" min="1" step="0.1" title="Minimum spending level as a percent of target income." /></label>
+                  <label>Max Income Ceiling (%) <input name="maxCeiling" type="number" value="200" min="1" step="0.1" title="Maximum spending level as a percent of target income." /></label>
+                  <label class="advanced-only">Good-Year Extra to Cash Buffer (%) <input name="extraToCash" type="number" value="10" min="0" step="0.1" title="Extra withdrawal in good years moved into cash buffer." /></label>
+                  <label class="advanced-only">Cash Growth (%) <input name="cashGrowth" type="number" value="1" step="0.1" title="Annual growth rate applied to cash buffer." /></label>
+                  <label class="advanced-only">Post-Access Withdrawal Order
+                    <select name="withdrawalOrder" title="Order used to draw retirement income once pension is accessible.">
+                      <option value="pro-rata">Pro Rata (ISA/Pension/Taxable)</option>
+                      <option value="isa-first">ISA First</option>
+                      <option value="taxable-first">Taxable First</option>
+                      <option value="pension-first">Pension First</option>
+                    </select>
+                  </label>
+                </fieldset>
+              </details>
+
+              <details class="config-section" data-section-level="basic" open>
+                <summary>Simulation</summary>
+                <fieldset class="section-body">
+                  <label>Analysis Mode
+                    <select name="analysisMode" title="Choose retirement sweep mode, or CoastFIRE mode to find the earliest age you can stop contributions for a target retirement age.">
+                      <option value="retirement-sweep">Retirement Age Sweep</option>
+                      <option value="coast-fire">CoastFIRE (Find Coast Age)</option>
+                    </select>
+                  </label>
+                  <label data-show-when="analysisMode=coast-fire">CoastFIRE Retirement Age (optional) <input name="coastRetirementAge" type="number" min="18" step="1" placeholder="Uses model-picked age if blank" title="Used only in CoastFIRE mode. If blank, the model first picks a retirement age from the normal sweep." /></label>
+                  <label>Simulations per Age <input name="simulations" type="number" value="3000" min="100" step="100" title="Number of Monte Carlo runs per retirement age candidate." /></label>
+                  <label>Success Threshold (%) <input name="successThreshold" type="number" value="90" min="0" max="100" step="0.1" title="Required success probability to count an age as feasible." /></label>
+                  <label class="advanced-only">Seed <input name="seed" type="number" value="42" min="1" step="1" title="Random seed for reproducible Monte Carlo results." /></label>
+                </fieldset>
+              </details>
+            </div>
+
+            <div class="action-row">
+              <button type="submit" id="run-btn">Run Simulation</button>
+              <button type="button" id="csv-btn" disabled>Export Age Sweep CSV</button>
+              <p id="run-meta"></p>
+            </div>
+
+            <div class="preset-row">
+              <label>Preset Name
+                <input id="preset-name" type="text" placeholder="e.g. Base Plan" title="Name to save the current full set of inputs under." />
+              </label>
+              <label>Saved Presets
+                <select id="preset-select" title="Choose a saved preset to load or delete.">
+                  <option value="">Select preset...</option>
+                </select>
+              </label>
+              <button type="button" id="preset-save-btn">Save Preset</button>
+              <button type="button" id="preset-load-btn" class="secondary">Load Preset</button>
+              <button type="button" id="preset-delete-btn" class="secondary">Delete Preset</button>
+              <button type="button" id="reset-defaults-btn" class="secondary">Reset to Defaults</button>
+              <p id="preset-meta" aria-live="polite"></p>
+            </div>
+          </div>
+
+          <aside class="live-summary" id="live-summary">
+            <h3>Live Plan Snapshot</h3>
+            <ul>
+              <li><span>Total Starting Pot</span><strong data-summary="startTotal">-</strong></li>
+              <li><span>Total Planned Annual Contribution</span><strong data-summary="annualContribution">-</strong></li>
+              <li><span>ISA Overflow to Taxable</span><strong data-summary="isaOverflow">-</strong></li>
+              <li><span>Target Income (Real)</span><strong data-summary="targetIncome">-</strong></li>
+              <li><span>Mortgage Profile</span><strong data-summary="mortgage">-</strong></li>
+              <li><span>Mode / Strategy</span><strong data-summary="modeStrategy">-</strong></li>
+              <li><span>Retirement Window</span><strong data-summary="retirementWindow">-</strong></li>
+              <li><span>Simulation Size</span><strong data-summary="simScale">-</strong></li>
+            </ul>
+            <p class="live-summary-note">Values update as you type. Final results still require running the simulation.</p>
+          </aside>
+        </div>
+      </form>
+    </section>
+
+    <section class="panel results">
+      <h2>Summary</h2>
+      <div id="summary-cards" class="cards"></div>
+      <canvas id="success-chart" aria-label="Success rate chart"></canvas>
+    </section>
+
+    <section class="panel table-panel">
+      <h2>Age Sweep</h2>
+      <div class="table-wrap">
+        <table id="age-table">
+          <thead>
+            <tr>
+              <th id="age-col-header">Age</th>
+              <th>Success %</th>
+              <th>Median Retirement Total (Today £)</th>
+              <th>P10 Retirement Total (Today £)</th>
+              <th>Median Retirement ISA</th>
+              <th>Median Retirement Taxable</th>
+              <th>Median Retirement Pension</th>
+              <th>Median Retirement Cash</th>
+              <th>P10 Retirement ISA</th>
+              <th>P10 Retirement Taxable</th>
+              <th>P10 Retirement Pension</th>
+              <th>P10 Retirement Cash</th>
+              <th>Median Total (Today £)</th>
+              <th>P10 Total (Today £)</th>
+              <th>Median ISA</th>
+              <th>Median Taxable</th>
+              <th>Median Pension</th>
+              <th>Median Cash</th>
+              <th>P10 ISA</th>
+              <th>P10 Taxable</th>
+              <th>P10 Pension</th>
+              <th>P10 Cash</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
