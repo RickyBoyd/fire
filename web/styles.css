@@ -120,6 +120,22 @@ body {
   align-items: start;
 }
 
+#config-form.basic-mode .controls-layout {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+#config-form.basic-mode .section-body {
+  grid-template-columns: 1fr;
+}
+
+#config-form.basic-mode .quick-presets {
+  display: none;
+}
+
+#config-form.basic-mode .live-summary {
+  position: static;
+}
+
 .controls-main {
   min-width: 0;
 }

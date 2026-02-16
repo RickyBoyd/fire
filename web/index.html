@@ -62,6 +62,13 @@
               <details class="config-section" data-section-level="basic" open>
                 <summary>Contributions and Tax</summary>
                 <fieldset class="section-body">
+                  <label class="basic-only">Risk Profile
+                    <select name="riskProfile" title="Applies a default set of return, volatility, and withdrawal assumptions for Basic mode.">
+                      <option value="balanced">Balanced</option>
+                      <option value="conservative">Conservative</option>
+                      <option value="growth">Growth</option>
+                    </select>
+                  </label>
                   <label>ISA Annual Contribution (£) <input name="isaContribution" type="number" value="30000" min="0" step="100" title="Amount you plan to add to ISA each year before applying ISA limit." /></label>
                   <label>ISA Annual Limit (£) <input name="isaLimit" type="number" value="20000" min="0" step="100" title="Maximum amount allowed into ISA per year; excess is redirected to taxable account." /></label>
                   <label>Taxable Annual Contribution (£) <input name="taxableContribution" type="number" value="5000" min="0" step="100" title="Planned annual contribution directly into taxable account." /></label>

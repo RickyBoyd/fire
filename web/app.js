@@ -5,6 +5,76 @@
   const STORAGE_SCHEMA_VERSION = 1;
   const AUTOSAVE_DELAY_MS = 300;
 
+  const BASIC_VISIBLE_FIELDS = new Set([
+    "currentAge",
+    "pensionAccessAge",
+    "isaStart",
+    "taxableStart",
+    "pensionStart",
+    "isaContribution",
+    "taxableContribution",
+    "pensionContribution",
+    "isaLimit",
+    "riskProfile",
+    "targetIncome",
+    "mortgageAnnualPayment",
+    "mortgageEndAge"
+  ]);
+
+  const BASIC_RISK_PROFILES = {
+    conservative: {
+      withdrawalPolicy: "guardrails",
+      isaMean: "5",
+      taxableMean: "5",
+      pensionMean: "5",
+      isaVol: "9",
+      taxableVol: "9",
+      pensionVol: "9",
+      badCut: "12",
+      goodRaise: "3",
+      minFloor: "90",
+      maxCeiling: "130",
+      successThreshold: "92",
+      inflationMean: "2.5",
+      inflationVol: "1.0",
+      correlation: "0.8"
+    },
+    balanced: {
+      withdrawalPolicy: "guardrails",
+      isaMean: "8",
+      taxableMean: "8",
+      pensionMean: "8",
+      isaVol: "12",
+      taxableVol: "12",
+      pensionVol: "12",
+      badCut: "10",
+      goodRaise: "5",
+      minFloor: "80",
+      maxCeiling: "180",
+      successThreshold: "90",
+      inflationMean: "2.5",
+      inflationVol: "1.0",
+      correlation: "0.8"
+    },
+    growth: {
+      withdrawalPolicy: "guardrails",
+      isaMean: "10",
+      taxableMean: "10",
+      pensionMean: "10",
+      isaVol: "18",
+      taxableVol: "18",
+      pensionVol: "18",
+      badCut: "12",
+      goodRaise: "6",
+      minFloor: "70",
+      maxCeiling: "220",
+      successThreshold: "85",
+      inflationMean: "2.5",
+      inflationVol: "1.0",
+      correlation: "0.8"
+    }
+  };
+
   const QUICK_PRESETS = {
     conservative: {
       isaMean: "5",
@@ -304,10 +374,7 @@
     runMeta.textContent = "Running via Rust API...";
 
     try {
-      const params = new URLSearchParams();
-      for (const [key, value] of new FormData(form).entries()) {
-        params.set(String(key), String(value));
-      }
+      const params = buildApiParams();
 
       const started = performance.now();
       const response = await fetch(`/api/simulate?${params.toString()}`);
@@ -701,6 +768,79 @@
     return names;
   }
 
+  function buildApiParams() {
+    if (currentInputMode() === "basic") {
+      return buildBasicApiParams();
+    }
+
+    const params = new URLSearchParams();
+    for (const [key, value] of new FormData(form).entries()) {
+      params.set(String(key), String(value));
+    }
+    return params;
+  }
+
+  function buildBasicApiParams() {
+    const params = new URLSearchParams();
+    const riskProfile =
+      BASIC_RISK_PROFILES[selectedValue("riskProfile")] || BASIC_RISK_PROFILES.balanced;
+    const isaLimit = Math.max(parseNumber("isaLimit"), 0);
+    const requestedIsaContribution = Math.max(parseNumber("isaContribution"), 0);
+    const requestedTaxableContribution = Math.max(parseNumber("taxableContribution"), 0);
+    const requestedPensionContribution = Math.max(parseNumber("pensionContribution"), 0);
+    const isaContribution = Math.min(requestedIsaContribution, isaLimit);
+    const overflowToTaxable = Math.max(requestedIsaContribution - isaContribution, 0);
+    const taxableContribution = requestedTaxableContribution + overflowToTaxable;
+    const mortgagePayment = Math.max(parseNumber("mortgageAnnualPayment"), 0);
+    const mortgageEndAge = selectedValue("mortgageEndAge").trim();
+    const taxableStart = Math.max(parseNumber("taxableStart"), 0);
+
+    for (const name of [
+      "currentAge",
+      "pensionAccessAge",
+      "isaStart",
+      "taxableStart",
+      "pensionStart",
+      "targetIncome"
+    ]) {
+      setFormParam(params, name);
+    }
+
+    params.set("analysisMode", "retirement-sweep");
+    params.set("withdrawalPolicy", String(riskProfile.withdrawalPolicy));
+    params.set("isaLimit", String(isaLimit));
+    params.set("isaContribution", String(isaContribution));
+    params.set("taxableContribution", String(taxableContribution));
+    params.set("pensionContribution", String(requestedPensionContribution));
+    params.set("contributionGrowth", "0");
+    params.set("taxableBasisStart", String(taxableStart));
+    params.set("mortgageAnnualPayment", String(mortgagePayment));
+    if (mortgagePayment > 0 && mortgageEndAge !== "") {
+      params.set("mortgageEndAge", mortgageEndAge);
+    }
+
+    // Keep planning window stable with existing hidden values.
+    for (const name of ["maxAge", "horizonAge", "simulations", "seed"]) {
+      setFormParam(params, name);
+    }
+
+    for (const [key, value] of Object.entries(riskProfile)) {
+      if (key === "withdrawalPolicy") {
+        continue;
+      }
+      params.set(key, String(value));
+    }
+
+    return params;
+  }
+
+  function setFormParam(params, name) {
+    const value = selectedValue(name);
+    if (value !== "") {
+      params.set(name, value);
+    }
+  }
+
   function serializeForm() {
     const values = {};
     for (const [key, value] of new FormData(form).entries()) {
@@ -1014,27 +1154,68 @@
     if (Math.abs(clamped - basisValue) > 1e-9) {
       basisField.value = String(clamped);
     }
+
   }
 
   function applyConditionalVisibility() {
     const mode = currentInputMode();
     const values = serializeForm();
+    form.classList.toggle("basic-mode", mode === "basic");
 
-    document.querySelectorAll(".advanced-only").forEach((el) => {
-      el.classList.toggle("is-hidden", mode !== "advanced");
+    const labels = Array.from(form.querySelectorAll("label"));
+    labels.forEach((label) => {
+      const control = label.querySelector("input[name], select[name], textarea[name]");
+      let hidden = false;
+
+      if (label.classList.contains("advanced-only") && mode !== "advanced") {
+        hidden = true;
+      }
+      if (label.classList.contains("basic-only") && mode !== "basic") {
+        hidden = true;
+      }
+      if (!hidden && mode === "basic" && control) {
+        hidden = !BASIC_VISIBLE_FIELDS.has(control.name);
+      }
+      if (!hidden && label.hasAttribute("data-show-when")) {
+        const expr = String(label.getAttribute("data-show-when") || "");
+        hidden = !evaluateShowWhen(expr, values);
+      }
+
+      label.classList.toggle("is-hidden", hidden);
     });
 
+    // Handle non-label conditional elements if any are added later.
     document.querySelectorAll("[data-show-when]").forEach((el) => {
+      if (el.tagName.toLowerCase() === "label") {
+        return;
+      }
       const expr = String(el.getAttribute("data-show-when") || "");
       const show = evaluateShowWhen(expr, values);
       el.classList.toggle("is-hidden", !show);
     });
 
+    document.querySelectorAll(".quick-presets").forEach((el) => {
+      el.classList.toggle("is-hidden", mode === "basic");
+    });
+
     document.querySelectorAll(".config-section").forEach((section) => {
-      const level = String(section.getAttribute("data-section-level") || "basic");
-      if (mode === "basic" && level === "advanced") {
+      const visibleControls = Array.from(section.querySelectorAll("label")).filter(
+        (label) => !label.classList.contains("is-hidden")
+      );
+      const hasVisibleControls = visibleControls.length > 0;
+      section.classList.toggle("is-hidden", !hasVisibleControls);
+      if (!hasVisibleControls) {
         section.removeAttribute("open");
-      } else if (mode === "advanced" && !section.hasAttribute("open")) {
+        return;
+      }
+
+      if (mode === "basic") {
+        section.setAttribute("open", "");
+        return;
+      }
+
+      const level = String(section.getAttribute("data-section-level") || "basic");
+      if (level === "advanced") {
         section.setAttribute("open", "");
       }
     });
@@ -1123,6 +1304,7 @@
   }
 
   function updateLiveSummary() {
+    const mode = currentInputMode();
     const currentAge = parseNumber("currentAge");
     const maxAge = parseNumber("maxAge");
     const horizonAge = parseNumber("horizonAge");
@@ -1134,22 +1316,30 @@
     const cashStart = parseNumber("cashStart");
     const startTotal = isaStart + taxableStart + pensionStart + cashStart;
 
+    const isaLimit = Math.max(parseNumber("isaLimit"), 0);
     const isaContribution = parseNumber("isaContribution");
-    const isaLimit = parseNumber("isaLimit");
     const taxableContribution = parseNumber("taxableContribution");
     const pensionContribution = parseNumber("pensionContribution");
-    const isaEffective = Math.min(Math.max(isaContribution, 0), Math.max(isaLimit, 0));
-    const isaOverflow = Math.max(isaContribution - isaEffective, 0);
+    const isaEffective = Math.min(Math.max(isaContribution, 0), isaLimit);
+    const isaOverflowFromDetailed = Math.max(isaContribution - isaEffective, 0);
     const annualContribution =
-      isaEffective + taxableContribution + isaOverflow + pensionContribution;
+      isaEffective +
+      Math.max(taxableContribution, 0) +
+      isaOverflowFromDetailed +
+      Math.max(pensionContribution, 0);
+    const isaOverflow = isaOverflowFromDetailed;
 
     const targetIncome = parseNumber("targetIncome");
     const mortgageAnnualPayment = parseNumber("mortgageAnnualPayment");
     const mortgageEndAgeRaw = selectedValue("mortgageEndAge");
     const mortgageEndAge =
       mortgageEndAgeRaw.trim() === "" ? null : Number(mortgageEndAgeRaw);
-    const analysisMode = selectedOptionText("analysisMode");
-    const strategy = selectedOptionText("withdrawalPolicy");
+    const analysisMode =
+      mode === "basic" ? "Retirement Age Sweep" : selectedOptionText("analysisMode");
+    const strategy =
+      mode === "basic"
+        ? `${selectedOptionText("riskProfile")} profile`
+        : selectedOptionText("withdrawalPolicy");
     const mortgageSummary =
       mortgageAnnualPayment <= 0
         ? "None"
@@ -1201,10 +1391,10 @@
     const simulations = parseNumber("simulations");
     const isaContribution = parseNumber("isaContribution");
     const isaLimit = parseNumber("isaLimit");
-    const analysisMode = selectedValue("analysisMode");
+    const analysisMode = mode === "basic" ? "retirement-sweep" : selectedValue("analysisMode");
     const coastAgeRaw = selectedValue("coastRetirementAge");
     const coastAge = coastAgeRaw === "" ? null : Number(coastAgeRaw);
-    const strategy = selectedValue("withdrawalPolicy");
+    const strategy = mode === "basic" ? "guardrails" : selectedValue("withdrawalPolicy");
 
     if (maxAge < currentAge) {
       errors.push("Max retirement age must be greater than or equal to current age.");
@@ -1237,7 +1427,7 @@
     if (strategy === "guyton-klinger" && gkLower > gkUpper) {
       errors.push("GK lower guardrail must be less than or equal to upper guardrail.");
     }
-    if (analysisMode === "coast-fire" && coastAge !== null) {
+    if (mode !== "basic" && analysisMode === "coast-fire" && coastAge !== null) {
       if (coastAge < currentAge) {
         errors.push("Coast retirement age must be at least current age.");
       }
