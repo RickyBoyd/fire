@@ -135,6 +135,7 @@
     "taxableBasisStart",
     "pensionStart",
     "cashStart",
+    "bondLadderStart",
     "isaContribution",
     "isaLimit",
     "taxableContribution",
@@ -169,6 +170,7 @@
     "pensionVol",
     "inflationMean",
     "inflationVol",
+    "bondLadderYield",
     "badThreshold",
     "goodThreshold",
     "badCut",
@@ -203,7 +205,7 @@
     "goalSimulationsPerIteration",
     "goalFinalSimulations"
   ]);
-  const YEAR_FIELDS = new Set(["bucketYearsTarget"]);
+  const YEAR_FIELDS = new Set(["bucketYearsTarget", "bondLadderYears"]);
   const RATIO_FIELDS = new Set(["correlation"]);
 
   const form = document.getElementById("config-form");
@@ -336,20 +338,24 @@
       "median_retirement_taxable_today",
       "median_retirement_pension_today",
       "median_retirement_cash_today",
+      "median_retirement_bond_ladder_today",
       "p10_retirement_isa_today",
       "p10_retirement_taxable_today",
       "p10_retirement_pension_today",
       "p10_retirement_cash_today",
+      "p10_retirement_bond_ladder_today",
       "median_total_today",
       "p10_total_today",
       "median_isa_today",
       "median_taxable_today",
       "median_pension_today",
       "median_cash_today",
+      "median_bond_ladder_today",
       "p10_isa_today",
       "p10_taxable_today",
       "p10_pension_today",
       "p10_cash_today",
+      "p10_bond_ladder_today",
       "p10_min_income_ratio",
       "median_avg_income_ratio"
     ];
@@ -363,20 +369,24 @@
       r.medianRetirementTaxable,
       r.medianRetirementPension,
       r.medianRetirementCash,
+      r.medianRetirementBondLadder,
       r.p10RetirementIsa,
       r.p10RetirementTaxable,
       r.p10RetirementPension,
       r.p10RetirementCash,
+      r.p10RetirementBondLadder,
       r.medianTerminalPot,
       r.p10TerminalPot,
       r.medianTerminalIsa,
       r.medianTerminalTaxable,
       r.medianTerminalPension,
       r.medianTerminalCash,
+      r.medianTerminalBondLadder,
       r.p10TerminalIsa,
       r.p10TerminalTaxable,
       r.p10TerminalPension,
       r.p10TerminalCash,
+      r.p10TerminalBondLadder,
       r.p10MinIncomeRatio,
       r.medianAvgIncomeRatio
     ]);
@@ -777,6 +787,7 @@
         "Median Retirement Pension / Cash",
         `${money(chosen.medianRetirementPension)} / ${money(chosen.medianRetirementCash)}`
       ],
+      ["Median Retirement Bond Ladder", money(chosen.medianRetirementBondLadder)],
       [
         "P10 Retirement ISA / Taxable",
         `${money(chosen.p10RetirementIsa)} / ${money(chosen.p10RetirementTaxable)}`
@@ -785,6 +796,7 @@
         "P10 Retirement Pension / Cash",
         `${money(chosen.p10RetirementPension)} / ${money(chosen.p10RetirementCash)}`
       ],
+      ["P10 Retirement Bond Ladder", money(chosen.p10RetirementBondLadder)],
       [
         "Median Terminal Total at Horizon (Today £)",
         money(chosen.medianTerminalPot)
@@ -801,6 +813,16 @@
         "Median Terminal Pension / Cash",
         `${money(chosen.medianTerminalPension)} / ${money(chosen.medianTerminalCash)}`
       ],
+      ["Median Terminal Bond Ladder", money(chosen.medianTerminalBondLadder)],
+      [
+        "P10 Terminal ISA / Taxable",
+        `${money(chosen.p10TerminalIsa)} / ${money(chosen.p10TerminalTaxable)}`
+      ],
+      [
+        "P10 Terminal Pension / Cash",
+        `${money(chosen.p10TerminalPension)} / ${money(chosen.p10TerminalCash)}`
+      ],
+      ["P10 Terminal Bond Ladder", money(chosen.p10TerminalBondLadder)],
       [
         "P10 Minimum Income",
         `${(chosen.p10MinIncomeRatio * 100).toFixed(1)}% of target`
@@ -837,20 +859,24 @@
           <td>${money(r.medianRetirementTaxable)}</td>
           <td>${money(r.medianRetirementPension)}</td>
           <td>${money(r.medianRetirementCash)}</td>
+          <td>${money(r.medianRetirementBondLadder)}</td>
           <td>${money(r.p10RetirementIsa)}</td>
           <td>${money(r.p10RetirementTaxable)}</td>
           <td>${money(r.p10RetirementPension)}</td>
           <td>${money(r.p10RetirementCash)}</td>
+          <td>${money(r.p10RetirementBondLadder)}</td>
           <td>${money(r.medianTerminalPot)}</td>
           <td>${money(r.p10TerminalPot)}</td>
           <td>${money(r.medianTerminalIsa)}</td>
           <td>${money(r.medianTerminalTaxable)}</td>
           <td>${money(r.medianTerminalPension)}</td>
           <td>${money(r.medianTerminalCash)}</td>
+          <td>${money(r.medianTerminalBondLadder)}</td>
           <td>${money(r.p10TerminalIsa)}</td>
           <td>${money(r.p10TerminalTaxable)}</td>
           <td>${money(r.p10TerminalPension)}</td>
           <td>${money(r.p10TerminalCash)}</td>
+          <td>${money(r.p10TerminalBondLadder)}</td>
         </tr>`
       )
       .join("");
@@ -892,7 +918,7 @@
 
     if (rows.length === 0) {
       cashflowTableBody.innerHTML =
-        '<tr><td colspan="16">No yearly cashflow trace available for this run.</td></tr>';
+        '<tr><td colspan="17">No yearly cashflow trace available for this run.</td></tr>';
       return;
     }
 
@@ -914,6 +940,7 @@
           <td>${money(row.medianEndTaxable)}</td>
           <td>${money(row.medianEndPension)}</td>
           <td>${money(row.medianEndCash)}</td>
+          <td>${money(row.medianEndBondLadder)}</td>
           <td>${money(row.medianEndTotal)}</td>
         </tr>`
       )
@@ -948,8 +975,10 @@
     const xAxisTitle = isCoastMode ? "Coast Age" : "Retirement Age";
     const tooltipDetails = ageResults.map((r) => [
       `Median retirement total: ${money(r.medianRetirementPot)}`,
+      `Median retirement bond ladder: ${money(r.medianRetirementBondLadder)}`,
       `P10 retirement total: ${money(r.p10RetirementPot)}`,
       `Median terminal total: ${money(r.medianTerminalPot)}`,
+      `Median terminal bond ladder: ${money(r.medianTerminalBondLadder)}`,
       `P10 terminal total: ${money(r.p10TerminalPot)}`,
       `P10 min income: ${(r.p10MinIncomeRatio * 100).toFixed(1)}%`
     ]);
@@ -1247,6 +1276,10 @@
 
     // Keep planning window stable with existing hidden values.
     for (const name of ["maxAge", "horizonAge", "simulations", "seed"]) {
+      setFormParam(params, name);
+    }
+
+    for (const name of ["bondLadderStart", "bondLadderYield", "bondLadderYears"]) {
       setFormParam(params, name);
     }
 
@@ -1777,7 +1810,8 @@
     const taxableStart = parseNumber("taxableStart");
     const pensionStart = parseNumber("pensionStart");
     const cashStart = parseNumber("cashStart");
-    const startTotal = isaStart + taxableStart + pensionStart + cashStart;
+    const bondLadderStart = parseNumber("bondLadderStart");
+    const startTotal = isaStart + taxableStart + pensionStart + cashStart + bondLadderStart;
 
     const isaLimit = Math.max(parseNumber("isaLimit"), 0);
     const isaContribution = parseNumber("isaContribution");
@@ -1854,6 +1888,9 @@
     const simulations = parseNumber("simulations");
     const isaContribution = parseNumber("isaContribution");
     const isaLimit = parseNumber("isaLimit");
+    const bondLadderStart = parseNumber("bondLadderStart");
+    const bondLadderYield = parseNumber("bondLadderYield");
+    const bondLadderYears = parseNumber("bondLadderYears");
     const analysisMode = mode === "basic" ? "retirement-sweep" : selectedValue("analysisMode");
     const coastAgeRaw = selectedValue("coastRetirementAge");
     const coastAge = coastAgeRaw === "" ? null : Number(coastAgeRaw);
@@ -1878,6 +1915,15 @@
     }
     if (targetIncome <= 0) {
       errors.push("Target income must be greater than zero.");
+    }
+    if (bondLadderStart < 0) {
+      errors.push("Bond ladder starting value must be zero or positive.");
+    }
+    if (!Number.isFinite(bondLadderYield) || bondLadderYield <= -100) {
+      errors.push("Bond ladder yield must be greater than -100%.");
+    }
+    if (!Number.isFinite(bondLadderYears) || bondLadderYears < 0) {
+      errors.push("Bond ladder years must be zero or positive.");
     }
     if (mortgageAnnualPayment < 0) {
       errors.push("Mortgage payment must be zero or positive.");
@@ -1966,6 +2012,12 @@
       messages.push({
         level: "info",
         text: "Mortgage does not end before horizon age, so no mortgage drop occurs in the simulation window."
+      });
+    }
+    if (bondLadderStart > 0 && bondLadderYears === 0) {
+      messages.push({
+        level: "info",
+        text: "Bond ladder years is 0, so the ladder behaves as a fully liquid low-volatility pot."
       });
     }
 

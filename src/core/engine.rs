@@ -13,11 +13,13 @@ struct ScenarioResult {
     reported_retirement_taxable: f64,
     reported_retirement_pension: f64,
     reported_retirement_cash: f64,
+    reported_retirement_bond_ladder: f64,
     reported_terminal_total: f64,
     reported_terminal_isa: f64,
     reported_terminal_taxable: f64,
     reported_terminal_pension: f64,
     reported_terminal_cash: f64,
+    reported_terminal_bond_ladder: f64,
     min_income_ratio: f64,
     avg_income_ratio: f64,
 }
@@ -66,6 +68,7 @@ struct YearTracePoint {
     end_taxable_real: f64,
     end_pension_real: f64,
     end_cash_real: f64,
+    end_bond_ladder_real: f64,
     end_total_real: f64,
 }
 
@@ -76,6 +79,7 @@ struct Portfolio {
     taxable_basis: f64,
     pension: f64,
     cash_buffer: f64,
+    bond_ladder: f64,
 }
 
 #[derive(Debug)]
@@ -151,6 +155,7 @@ struct YearlyAccumulator {
     end_taxable: Vec<Vec<f64>>,
     end_pension: Vec<Vec<f64>>,
     end_cash: Vec<Vec<f64>>,
+    end_bond_ladder: Vec<Vec<f64>>,
     end_total: Vec<Vec<f64>>,
 }
 
@@ -179,6 +184,7 @@ impl YearlyAccumulator {
             end_taxable: make(),
             end_pension: make(),
             end_cash: make(),
+            end_bond_ladder: make(),
             end_total: make(),
         }
     }
@@ -198,6 +204,7 @@ impl YearlyAccumulator {
         self.end_taxable[index].push(point.end_taxable_real);
         self.end_pension[index].push(point.end_pension_real);
         self.end_cash[index].push(point.end_cash_real);
+        self.end_bond_ladder[index].push(point.end_bond_ladder_real);
         self.end_total[index].push(point.end_total_real);
     }
 
@@ -223,6 +230,7 @@ impl YearlyAccumulator {
                 median_end_taxable: percentile(&mut self.end_taxable[idx], 50.0),
                 median_end_pension: percentile(&mut self.end_pension[idx], 50.0),
                 median_end_cash: percentile(&mut self.end_cash[idx], 50.0),
+                median_end_bond_ladder: percentile(&mut self.end_bond_ladder[idx], 50.0),
                 median_end_total: percentile(&mut self.end_total[idx], 50.0),
             });
         }
@@ -278,6 +286,7 @@ pub fn run_yearly_cashflow_trace(
                 end_taxable_real: 0.0,
                 end_pension_real: 0.0,
                 end_cash_real: 0.0,
+                end_bond_ladder_real: 0.0,
                 end_total_real: 0.0,
             });
             acc.push(idx, fallback);
@@ -317,11 +326,13 @@ fn evaluate_age_candidate(
     let mut retirement_taxable = Vec::with_capacity(inputs.simulations as usize);
     let mut retirement_pension = Vec::with_capacity(inputs.simulations as usize);
     let mut retirement_cash = Vec::with_capacity(inputs.simulations as usize);
+    let mut retirement_bond_ladder = Vec::with_capacity(inputs.simulations as usize);
     let mut terminal = Vec::with_capacity(inputs.simulations as usize);
     let mut terminal_isa = Vec::with_capacity(inputs.simulations as usize);
     let mut terminal_taxable = Vec::with_capacity(inputs.simulations as usize);
     let mut terminal_pension = Vec::with_capacity(inputs.simulations as usize);
     let mut terminal_cash = Vec::with_capacity(inputs.simulations as usize);
+    let mut terminal_bond_ladder = Vec::with_capacity(inputs.simulations as usize);
     let mut min_income_ratios = Vec::with_capacity(inputs.simulations as usize);
     let mut avg_income_ratios = Vec::with_capacity(inputs.simulations as usize);
 
@@ -344,11 +355,13 @@ fn evaluate_age_candidate(
         retirement_taxable.push(scenario.reported_retirement_taxable);
         retirement_pension.push(scenario.reported_retirement_pension);
         retirement_cash.push(scenario.reported_retirement_cash);
+        retirement_bond_ladder.push(scenario.reported_retirement_bond_ladder);
         terminal.push(scenario.reported_terminal_total);
         terminal_isa.push(scenario.reported_terminal_isa);
         terminal_taxable.push(scenario.reported_terminal_taxable);
         terminal_pension.push(scenario.reported_terminal_pension);
         terminal_cash.push(scenario.reported_terminal_cash);
+        terminal_bond_ladder.push(scenario.reported_terminal_bond_ladder);
         min_income_ratios.push(scenario.min_income_ratio);
         avg_income_ratios.push(scenario.avg_income_ratio);
     }
@@ -366,6 +379,8 @@ fn evaluate_age_candidate(
         p10_retirement_pension: percentile(&mut retirement_pension, 10.0),
         median_retirement_cash: percentile(&mut retirement_cash, 50.0),
         p10_retirement_cash: percentile(&mut retirement_cash, 10.0),
+        median_retirement_bond_ladder: percentile(&mut retirement_bond_ladder, 50.0),
+        p10_retirement_bond_ladder: percentile(&mut retirement_bond_ladder, 10.0),
         median_terminal_pot: percentile(&mut terminal, 50.0),
         p10_terminal_pot: percentile(&mut terminal, 10.0),
         median_terminal_isa: percentile(&mut terminal_isa, 50.0),
@@ -376,6 +391,8 @@ fn evaluate_age_candidate(
         p10_terminal_pension: percentile(&mut terminal_pension, 10.0),
         median_terminal_cash: percentile(&mut terminal_cash, 50.0),
         p10_terminal_cash: percentile(&mut terminal_cash, 10.0),
+        median_terminal_bond_ladder: percentile(&mut terminal_bond_ladder, 50.0),
+        p10_terminal_bond_ladder: percentile(&mut terminal_bond_ladder, 10.0),
         p10_min_income_ratio: percentile(&mut min_income_ratios, 10.0),
         median_avg_income_ratio: percentile(&mut avg_income_ratios, 50.0),
     }
@@ -394,6 +411,7 @@ fn simulate_scenario(
         taxable_basis: inputs.taxable_cost_basis_start.min(inputs.taxable_start),
         pension: inputs.pension_start,
         cash_buffer: inputs.cash_start,
+        bond_ladder: inputs.bond_ladder_start,
     };
 
     let mut price_index = 1.0;
@@ -429,23 +447,29 @@ fn simulate_scenario(
                 end_taxable_real: portfolio.taxable / deflator,
                 end_pension_real: portfolio.pension / deflator,
                 end_cash_real: portfolio.cash_buffer / deflator,
+                end_bond_ladder_real: portfolio.bond_ladder / deflator,
                 end_total_real: (portfolio.isa
                     + portfolio.taxable
                     + portfolio.pension
-                    + portfolio.cash_buffer)
+                    + portfolio.cash_buffer
+                    + portfolio.bond_ladder)
                     / deflator,
             });
         }
     }
 
     let retirement_deflator = price_index.max(1e-9);
-    let retirement_nominal_total =
-        portfolio.isa + portfolio.taxable + portfolio.pension + portfolio.cash_buffer;
+    let retirement_nominal_total = portfolio.isa
+        + portfolio.taxable
+        + portfolio.pension
+        + portfolio.cash_buffer
+        + portfolio.bond_ladder;
     let retirement_total_real = retirement_nominal_total / retirement_deflator;
     let retirement_isa_real = portfolio.isa / retirement_deflator;
     let retirement_taxable_real = portfolio.taxable / retirement_deflator;
     let retirement_pension_real = portfolio.pension / retirement_deflator;
     let retirement_cash_real = portfolio.cash_buffer / retirement_deflator;
+    let retirement_bond_ladder_real = portfolio.bond_ladder / retirement_deflator;
 
     let initial_withdrawal_rate = inputs.target_annual_income / retirement_total_real.max(1e-9);
     let mut spending_state = SpendingState {
@@ -490,6 +514,7 @@ fn simulate_scenario(
         let year_outcome = run_withdrawal_year(
             inputs,
             age,
+            age.saturating_sub(retirement_age),
             planned_nominal_spending,
             prev_real_return,
             planned_real_spending,
@@ -526,6 +551,7 @@ fn simulate_scenario(
                     end_taxable_real: 0.0,
                     end_pension_real: 0.0,
                     end_cash_real: 0.0,
+                    end_bond_ladder_real: 0.0,
                     end_total_real: 0.0,
                 });
                 push_zero_trace_tail(trace_rows, age + 1, inputs.horizon_age);
@@ -538,19 +564,23 @@ fn simulate_scenario(
                 reported_retirement_taxable: retirement_taxable_real,
                 reported_retirement_pension: retirement_pension_real,
                 reported_retirement_cash: retirement_cash_real,
+                reported_retirement_bond_ladder: retirement_bond_ladder_real,
                 reported_terminal_total: 0.0,
                 reported_terminal_isa: 0.0,
                 reported_terminal_taxable: 0.0,
                 reported_terminal_pension: 0.0,
                 reported_terminal_cash: 0.0,
+                reported_terminal_bond_ladder: 0.0,
                 min_income_ratio,
                 avg_income_ratio: income_ratio_sum / years as f64,
             };
         }
 
-        let start_invested = portfolio.isa + portfolio.taxable + portfolio.pension;
+        let start_invested =
+            portfolio.isa + portfolio.taxable + portfolio.pension + portfolio.bond_ladder;
         apply_post_retirement_growth(inputs, &mut portfolio, &sampled);
-        let end_invested = portfolio.isa + portfolio.taxable + portfolio.pension;
+        let end_invested =
+            portfolio.isa + portfolio.taxable + portfolio.pension + portfolio.bond_ladder;
         prev_real_return = realized_real_return(start_invested, end_invested, sampled.inflation);
 
         if let Some(trace_rows) = trace.as_deref_mut() {
@@ -570,18 +600,23 @@ fn simulate_scenario(
                 end_taxable_real: portfolio.taxable / deflator,
                 end_pension_real: portfolio.pension / deflator,
                 end_cash_real: portfolio.cash_buffer / deflator,
+                end_bond_ladder_real: portfolio.bond_ladder / deflator,
                 end_total_real: (portfolio.isa
                     + portfolio.taxable
                     + portfolio.pension
-                    + portfolio.cash_buffer)
+                    + portfolio.cash_buffer
+                    + portfolio.bond_ladder)
                     / deflator,
             });
         }
     }
 
     let inflation_deflator = price_index.max(1e-9);
-    let nominal_total =
-        portfolio.isa + portfolio.taxable + portfolio.pension + portfolio.cash_buffer;
+    let nominal_total = portfolio.isa
+        + portfolio.taxable
+        + portfolio.pension
+        + portfolio.cash_buffer
+        + portfolio.bond_ladder;
 
     ScenarioResult {
         success: true,
@@ -590,11 +625,13 @@ fn simulate_scenario(
         reported_retirement_taxable: retirement_taxable_real,
         reported_retirement_pension: retirement_pension_real,
         reported_retirement_cash: retirement_cash_real,
+        reported_retirement_bond_ladder: retirement_bond_ladder_real,
         reported_terminal_total: nominal_total / inflation_deflator,
         reported_terminal_isa: portfolio.isa / inflation_deflator,
         reported_terminal_taxable: portfolio.taxable / inflation_deflator,
         reported_terminal_pension: portfolio.pension / inflation_deflator,
         reported_terminal_cash: portfolio.cash_buffer / inflation_deflator,
+        reported_terminal_bond_ladder: portfolio.bond_ladder / inflation_deflator,
         min_income_ratio,
         avg_income_ratio: income_ratio_sum / years as f64,
     }
@@ -617,6 +654,7 @@ fn push_zero_trace_tail(trace: &mut Vec<YearTracePoint>, start_age: u32, horizon
             end_taxable_real: 0.0,
             end_pension_real: 0.0,
             end_cash_real: 0.0,
+            end_bond_ladder_real: 0.0,
             end_total_real: 0.0,
         });
     }
@@ -628,6 +666,7 @@ fn apply_pre_retirement_growth(inputs: &Inputs, portfolio: &mut Portfolio, sampl
     portfolio.taxable *= 1.0 - inputs.taxable_return_tax_drag;
     portfolio.taxable = portfolio.taxable.max(0.0);
     portfolio.pension = (portfolio.pension * (1.0 + sampled.pension_return)).max(0.0);
+    portfolio.bond_ladder = (portfolio.bond_ladder * (1.0 + inputs.bond_ladder_yield)).max(0.0);
     portfolio.taxable_basis = portfolio.taxable_basis.min(portfolio.taxable);
 }
 
@@ -674,6 +713,7 @@ fn apply_post_retirement_growth(
     portfolio.taxable = portfolio.taxable.max(0.0);
     portfolio.pension = (portfolio.pension * (1.0 + sampled.pension_return)).max(0.0);
     portfolio.cash_buffer = (portfolio.cash_buffer * (1.0 + inputs.cash_growth_rate)).max(0.0);
+    portfolio.bond_ladder = (portfolio.bond_ladder * (1.0 + inputs.bond_ladder_yield)).max(0.0);
     portfolio.taxable_basis = portfolio.taxable_basis.min(portfolio.taxable);
 }
 
@@ -707,7 +747,8 @@ fn available_spendable_real(
     portfolio: &Portfolio,
     price_index: f64,
 ) -> f64 {
-    let mut total = portfolio.cash_buffer + portfolio.isa + portfolio.taxable;
+    let mut total =
+        portfolio.cash_buffer + portfolio.isa + portfolio.taxable + portfolio.bond_ladder;
     if age >= inputs.pension_access_age {
         total += portfolio.pension;
     }
@@ -803,6 +844,7 @@ fn plan_real_spending(
 fn run_withdrawal_year(
     inputs: &Inputs,
     age: u32,
+    retirement_year_index: u32,
     planned_nominal_spending: f64,
     prev_real_return: f64,
     planned_real_spending: f64,
@@ -826,6 +868,16 @@ fn run_withdrawal_year(
     portfolio.cash_buffer -= from_cash;
     realized += from_cash;
 
+    let ladder_scheduled = withdraw_from_bond_ladder_for_net(
+        inputs,
+        retirement_year_index,
+        (planned_nominal_spending - realized).max(0.0),
+        &mut portfolio.bond_ladder,
+        true,
+    );
+    realized += ladder_scheduled;
+    portfolio_withdrawn_total += ladder_scheduled;
+
     let needed = (planned_nominal_spending - realized).max(0.0);
     let main_withdrawn = withdraw_from_portfolio(
         inputs,
@@ -838,6 +890,18 @@ fn run_withdrawal_year(
     );
     realized += main_withdrawn;
     portfolio_withdrawn_total += main_withdrawn;
+
+    // If scheduled ladder withdrawals plus the normal order still cannot fund spending,
+    // allow remaining ladder balance to be tapped as an emergency backstop.
+    let ladder_backstop = withdraw_from_bond_ladder_for_net(
+        inputs,
+        retirement_year_index,
+        (planned_nominal_spending - realized).max(0.0),
+        &mut portfolio.bond_ladder,
+        false,
+    );
+    realized += ladder_backstop;
+    portfolio_withdrawn_total += ladder_backstop;
 
     if prev_real_return > inputs.good_year_threshold {
         let extra = match inputs.withdrawal_strategy {
@@ -886,6 +950,33 @@ fn run_withdrawal_year(
     }
 }
 
+fn withdraw_from_bond_ladder_for_net(
+    inputs: &Inputs,
+    retirement_year_index: u32,
+    target_net: f64,
+    bond_ladder: &mut f64,
+    scheduled: bool,
+) -> f64 {
+    if target_net <= 0.0 || *bond_ladder <= 0.0 {
+        return 0.0;
+    }
+
+    let max_available = if scheduled && inputs.bond_ladder_years > 0 {
+        if retirement_year_index >= inputs.bond_ladder_years {
+            *bond_ladder
+        } else {
+            let years_left = (inputs.bond_ladder_years - retirement_year_index).max(1) as f64;
+            (*bond_ladder / years_left).max(0.0).min(*bond_ladder)
+        }
+    } else {
+        *bond_ladder
+    };
+
+    let withdrawn = target_net.min(max_available);
+    *bond_ladder -= withdrawn;
+    withdrawn
+}
+
 fn withdraw_from_portfolio(
     inputs: &Inputs,
     age: u32,
@@ -913,12 +1004,23 @@ fn withdraw_from_portfolio(
     }
 
     let sequence: &[PotKind] = if !pension_access {
-        &[PotKind::Isa, PotKind::Taxable]
+        match order {
+            WithdrawalOrder::BondLadderFirst => {
+                &[PotKind::BondLadder, PotKind::Isa, PotKind::Taxable]
+            }
+            _ => &[PotKind::Isa, PotKind::Taxable],
+        }
     } else {
         match order {
             WithdrawalOrder::IsaFirst => &[PotKind::Isa, PotKind::Taxable, PotKind::Pension],
             WithdrawalOrder::TaxableFirst => &[PotKind::Taxable, PotKind::Isa, PotKind::Pension],
             WithdrawalOrder::PensionFirst => &[PotKind::Pension, PotKind::Taxable, PotKind::Isa],
+            WithdrawalOrder::BondLadderFirst => &[
+                PotKind::BondLadder,
+                PotKind::Isa,
+                PotKind::Taxable,
+                PotKind::Pension,
+            ],
             WithdrawalOrder::ProRata => unreachable!(),
         }
     };
@@ -950,6 +1052,7 @@ fn withdraw_from_portfolio(
 
 #[derive(Copy, Clone)]
 enum PotKind {
+    BondLadder,
     Isa,
     Taxable,
     Pension,
@@ -965,6 +1068,11 @@ fn withdraw_from_single_pot(
     tax_state: &mut TaxYearState,
 ) -> f64 {
     match pot {
+        PotKind::BondLadder => {
+            let x = portfolio.bond_ladder.min(target_net);
+            portfolio.bond_ladder -= x;
+            x
+        }
         PotKind::Isa => {
             let x = portfolio.isa.min(target_net);
             portfolio.isa -= x;
@@ -1003,6 +1111,7 @@ fn withdraw_pro_rata(
         }
 
         let isa_balance = portfolio.isa.max(0.0);
+        let ladder_balance = portfolio.bond_ladder.max(0.0);
         let taxable_balance = net_from_taxable_gross(
             portfolio.taxable,
             portfolio.taxable,
@@ -1018,16 +1127,27 @@ fn withdraw_pro_rata(
             0.0
         };
 
-        let total_capacity = isa_balance + taxable_balance + pension_balance;
+        let total_capacity = isa_balance + taxable_balance + pension_balance + ladder_balance;
         if total_capacity <= 1e-9 {
             break;
         }
 
         let isa_target = remaining * (isa_balance / total_capacity);
+        let ladder_target = remaining * (ladder_balance / total_capacity);
         let pension_target = remaining * (pension_balance / total_capacity);
         let taxable_target = remaining * (taxable_balance / total_capacity);
 
         let mut round_realized = 0.0;
+        round_realized += withdraw_from_single_pot(
+            inputs,
+            PotKind::BondLadder,
+            ladder_target,
+            pension_access,
+            portfolio,
+            cgt_state,
+            tax_state,
+        );
+
         round_realized += withdraw_from_single_pot(
             inputs,
             PotKind::Isa,
@@ -1069,9 +1189,14 @@ fn withdraw_pro_rata(
     }
 
     let fallback: &[PotKind] = if pension_access {
-        &[PotKind::Isa, PotKind::Pension, PotKind::Taxable]
+        &[
+            PotKind::Isa,
+            PotKind::Pension,
+            PotKind::Taxable,
+            PotKind::BondLadder,
+        ]
     } else {
-        &[PotKind::Isa, PotKind::Taxable]
+        &[PotKind::Isa, PotKind::Taxable, PotKind::BondLadder]
     };
 
     for pot in fallback {
@@ -1462,6 +1587,7 @@ mod tests {
             taxable_cost_basis_start: 12_000.0,
             pension_start: 200_000.0,
             cash_start: 0.0,
+            bond_ladder_start: 0.0,
             isa_annual_contribution: 30_000.0,
             isa_annual_contribution_limit: 20_000.0,
             taxable_annual_contribution: 5_000.0,
@@ -1513,6 +1639,8 @@ mod tests {
             bucket_target_years: 2.0,
             good_year_extra_buffer_withdrawal: 0.10,
             cash_growth_rate: 0.01,
+            bond_ladder_yield: 0.03,
+            bond_ladder_years: 10,
             post_access_withdrawal_order: WithdrawalOrder::ProRata,
         }
     }
@@ -1562,6 +1690,9 @@ mod tests {
         inputs.max_income_ceiling = 1.0;
         inputs.good_year_extra_buffer_withdrawal = 0.0;
         inputs.post_access_withdrawal_order = WithdrawalOrder::IsaFirst;
+        inputs.bond_ladder_start = 0.0;
+        inputs.bond_ladder_yield = 0.0;
+        inputs.bond_ladder_years = 0;
         inputs
     }
 
@@ -1585,6 +1716,9 @@ mod tests {
         inputs.mortgage_annual_payment = 0.0;
         inputs.mortgage_end_age = None;
         inputs.cash_growth_rate = 0.0;
+        inputs.bond_ladder_start = 0.0;
+        inputs.bond_ladder_yield = 0.0;
+        inputs.bond_ladder_years = 0;
         inputs.post_access_withdrawal_order = WithdrawalOrder::ProRata;
     }
 
@@ -1604,6 +1738,7 @@ mod tests {
             row.end_taxable_real,
             row.end_pension_real,
             row.end_cash_real,
+            row.end_bond_ladder_real,
             row.end_total_real,
         ]
         .iter()
@@ -1670,6 +1805,16 @@ mod tests {
                     b.p10_retirement_cash,
                 ),
                 (
+                    "median_retirement_bond_ladder",
+                    a.median_retirement_bond_ladder,
+                    b.median_retirement_bond_ladder,
+                ),
+                (
+                    "p10_retirement_bond_ladder",
+                    a.p10_retirement_bond_ladder,
+                    b.p10_retirement_bond_ladder,
+                ),
+                (
                     "median_terminal_pot",
                     a.median_terminal_pot,
                     b.median_terminal_pot,
@@ -1712,6 +1857,16 @@ mod tests {
                     b.p10_terminal_cash,
                 ),
                 (
+                    "median_terminal_bond_ladder",
+                    a.median_terminal_bond_ladder,
+                    b.median_terminal_bond_ladder,
+                ),
+                (
+                    "p10_terminal_bond_ladder",
+                    a.p10_terminal_bond_ladder,
+                    b.p10_terminal_bond_ladder,
+                ),
+                (
                     "p10_min_income_ratio",
                     a.p10_min_income_ratio,
                     b.p10_min_income_ratio,
@@ -1749,6 +1904,11 @@ mod tests {
             ("p10_retirement_pension", age.p10_retirement_pension),
             ("median_retirement_cash", age.median_retirement_cash),
             ("p10_retirement_cash", age.p10_retirement_cash),
+            (
+                "median_retirement_bond_ladder",
+                age.median_retirement_bond_ladder,
+            ),
+            ("p10_retirement_bond_ladder", age.p10_retirement_bond_ladder),
             ("median_terminal_pot", age.median_terminal_pot),
             ("p10_terminal_pot", age.p10_terminal_pot),
             ("median_terminal_isa", age.median_terminal_isa),
@@ -1759,6 +1919,11 @@ mod tests {
             ("p10_terminal_pension", age.p10_terminal_pension),
             ("median_terminal_cash", age.median_terminal_cash),
             ("p10_terminal_cash", age.p10_terminal_cash),
+            (
+                "median_terminal_bond_ladder",
+                age.median_terminal_bond_ladder,
+            ),
+            ("p10_terminal_bond_ladder", age.p10_terminal_bond_ladder),
             ("p10_min_income_ratio", age.p10_min_income_ratio),
             ("median_avg_income_ratio", age.median_avg_income_ratio),
         ] {
@@ -1770,11 +1935,13 @@ mod tests {
         assert!(age.p10_retirement_taxable <= age.median_retirement_taxable + 1e-6);
         assert!(age.p10_retirement_pension <= age.median_retirement_pension + 1e-6);
         assert!(age.p10_retirement_cash <= age.median_retirement_cash + 1e-6);
+        assert!(age.p10_retirement_bond_ladder <= age.median_retirement_bond_ladder + 1e-6);
         assert!(age.p10_terminal_pot <= age.median_terminal_pot + 1e-6);
         assert!(age.p10_terminal_isa <= age.median_terminal_isa + 1e-6);
         assert!(age.p10_terminal_taxable <= age.median_terminal_taxable + 1e-6);
         assert!(age.p10_terminal_pension <= age.median_terminal_pension + 1e-6);
         assert!(age.p10_terminal_cash <= age.median_terminal_cash + 1e-6);
+        assert!(age.p10_terminal_bond_ladder <= age.median_terminal_bond_ladder + 1e-6);
     }
 
     proptest! {
@@ -1919,7 +2086,8 @@ mod tests {
             let median_terminal_sum = age.median_terminal_isa
                 + age.median_terminal_taxable
                 + age.median_terminal_pension
-                + age.median_terminal_cash;
+                + age.median_terminal_cash
+                + age.median_terminal_bond_ladder;
             prop_assert!((median_terminal_sum - age.median_terminal_pot).abs() < 1e-3);
         }
     }
@@ -1991,11 +2159,19 @@ mod tests {
                 ("reported_retirement_taxable", scenario.reported_retirement_taxable),
                 ("reported_retirement_pension", scenario.reported_retirement_pension),
                 ("reported_retirement_cash", scenario.reported_retirement_cash),
+                (
+                    "reported_retirement_bond_ladder",
+                    scenario.reported_retirement_bond_ladder,
+                ),
                 ("reported_terminal_total", scenario.reported_terminal_total),
                 ("reported_terminal_isa", scenario.reported_terminal_isa),
                 ("reported_terminal_taxable", scenario.reported_terminal_taxable),
                 ("reported_terminal_pension", scenario.reported_terminal_pension),
                 ("reported_terminal_cash", scenario.reported_terminal_cash),
+                (
+                    "reported_terminal_bond_ladder",
+                    scenario.reported_terminal_bond_ladder,
+                ),
                 ("min_income_ratio", scenario.min_income_ratio),
                 ("avg_income_ratio", scenario.avg_income_ratio),
             ] {
@@ -2020,6 +2196,7 @@ mod tests {
                     row.end_taxable_real,
                     row.end_pension_real,
                     row.end_cash_real,
+                    row.end_bond_ladder_real,
                     row.end_total_real,
                 ] {
                     prop_assert!(value.is_finite());
@@ -2029,12 +2206,14 @@ mod tests {
                 prop_assert!(row.end_taxable_real >= -1e-6);
                 prop_assert!(row.end_pension_real >= -1e-6);
                 prop_assert!(row.end_cash_real >= -1e-6);
+                prop_assert!(row.end_bond_ladder_real >= -1e-6);
                 prop_assert!(row.end_total_real >= -1e-6);
 
                 let reconstructed_end = row.end_isa_real
                     + row.end_taxable_real
                     + row.end_pension_real
-                    + row.end_cash_real;
+                    + row.end_cash_real
+                    + row.end_bond_ladder_real;
                 prop_assert!((row.end_total_real - reconstructed_end).abs() <= 1e-4);
 
                 if row.end_total_real <= 1e-9 {
@@ -2042,6 +2221,7 @@ mod tests {
                     prop_assert!(row.end_taxable_real.abs() <= 1e-6);
                     prop_assert!(row.end_pension_real.abs() <= 1e-6);
                     prop_assert!(row.end_cash_real.abs() <= 1e-6);
+                    prop_assert!(row.end_bond_ladder_real.abs() <= 1e-6);
                 }
 
                 let all_zero = trace_row_is_all_zero(row);
@@ -2117,6 +2297,7 @@ mod tests {
             let mut expected_isa = inputs.isa_start;
             let mut expected_taxable = inputs.taxable_start;
             let mut expected_pension = inputs.pension_start;
+            let mut expected_bond_ladder = inputs.bond_ladder_start;
 
             for (year, row) in rows.iter().enumerate() {
                 let y = year as u32;
@@ -2128,6 +2309,8 @@ mod tests {
                     (taxable_after_growth * (1.0 - inputs.taxable_return_tax_drag)).max(0.0);
                 let pension_after_growth =
                     (expected_pension * (1.0 + inputs.pension_return_mean)).max(0.0);
+                let bond_ladder_after_growth =
+                    (expected_bond_ladder * (1.0 + inputs.bond_ladder_yield)).max(0.0);
 
                 let multiplier = (1.0 + inputs.contribution_growth_rate).powi(y as i32);
                 let requested_isa = inputs.isa_annual_contribution * multiplier;
@@ -2153,13 +2336,18 @@ mod tests {
                 prop_assert!((row.median_end_isa - expected_isa_end).abs() <= 1e-6);
                 prop_assert!((row.median_end_taxable - expected_taxable_end).abs() <= 1e-6);
                 prop_assert!((row.median_end_pension - expected_pension_end).abs() <= 1e-6);
+                prop_assert!((row.median_end_bond_ladder - bond_ladder_after_growth).abs() <= 1e-6);
 
-                let expected_total = expected_isa_end + expected_taxable_end + expected_pension_end;
+                let expected_total = expected_isa_end
+                    + expected_taxable_end
+                    + expected_pension_end
+                    + bond_ladder_after_growth;
                 prop_assert!((row.median_end_total - expected_total).abs() <= 1e-6);
 
                 expected_isa = expected_isa_end;
                 expected_taxable = expected_taxable_end;
                 expected_pension = expected_pension_end;
+                expected_bond_ladder = bond_ladder_after_growth;
             }
         }
     }
@@ -2240,7 +2428,11 @@ mod tests {
             let pension_net_capacity =
                 net_from_additional_pension_gross(inputs.pension_start, &tax_state0, &inputs);
             let net_capacity =
-                inputs.cash_start + inputs.isa_start + taxable_net_capacity + pension_net_capacity;
+                inputs.cash_start
+                    + inputs.isa_start
+                    + inputs.bond_ladder_start
+                    + taxable_net_capacity
+                    + pension_net_capacity;
             prop_assume!(net_capacity > 10.0);
 
             inputs.target_annual_income = net_capacity * spend_ratio_pct as f64 / 100.0;
@@ -2263,9 +2455,14 @@ mod tests {
                 taxable_basis: inputs.taxable_cost_basis_start,
                 pension: inputs.pension_start,
                 cash_buffer: inputs.cash_start,
+                bond_ladder: inputs.bond_ladder_start,
             };
 
-            let total_start = portfolio.isa + portfolio.taxable + portfolio.pension + portfolio.cash_buffer;
+            let total_start = portfolio.isa
+                + portfolio.taxable
+                + portfolio.pension
+                + portfolio.cash_buffer
+                + portfolio.bond_ladder;
             let mut spending_state = SpendingState {
                 current_real_spending: inputs.target_annual_income,
                 initial_withdrawal_rate: inputs.target_annual_income / total_start.max(1e-9),
@@ -2297,6 +2494,7 @@ mod tests {
             let outcome = run_withdrawal_year(
                 &inputs,
                 30,
+                0,
                 planned_nominal_spending,
                 0.0,
                 planned_real_spending,
@@ -2311,14 +2509,20 @@ mod tests {
             let after_withdraw_taxable = portfolio.taxable;
             let after_withdraw_pension = portfolio.pension;
             let after_withdraw_cash = portfolio.cash_buffer;
+            let after_withdraw_bond_ladder = portfolio.bond_ladder;
 
             let isa_withdrawn_gross = (start_isa - after_withdraw_isa).max(0.0);
             let taxable_withdrawn_gross = (start_taxable - after_withdraw_taxable).max(0.0);
             let pension_withdrawn_gross = (start_pension - after_withdraw_pension).max(0.0);
             let cash_used = (start_cash - after_withdraw_cash).max(0.0);
+            let start_bond_ladder = inputs.bond_ladder_start;
+            let bond_ladder_withdrawn_gross = (start_bond_ladder - after_withdraw_bond_ladder).max(0.0);
 
             let portfolio_withdrawn_gross =
-                isa_withdrawn_gross + taxable_withdrawn_gross + pension_withdrawn_gross;
+                isa_withdrawn_gross
+                    + taxable_withdrawn_gross
+                    + pension_withdrawn_gross
+                    + bond_ladder_withdrawn_gross;
             prop_assert!(
                 (portfolio_withdrawn_gross
                     - (outcome.portfolio_withdrawn_net + outcome.total_tax_paid()))
@@ -2337,11 +2541,14 @@ mod tests {
             let expected_pension_end =
                 (after_withdraw_pension * (1.0 + inputs.pension_return_mean)).max(0.0);
             let expected_cash_end = (after_withdraw_cash * (1.0 + inputs.cash_growth_rate)).max(0.0);
+            let expected_bond_ladder_end =
+                (after_withdraw_bond_ladder * (1.0 + inputs.bond_ladder_yield)).max(0.0);
 
             prop_assert!((portfolio.isa - expected_isa_end).abs() <= 1e-6);
             prop_assert!((portfolio.taxable - expected_taxable_end).abs() <= 1e-6);
             prop_assert!((portfolio.pension - expected_pension_end).abs() <= 1e-6);
             prop_assert!((portfolio.cash_buffer - expected_cash_end).abs() <= 1e-6);
+            prop_assert!((portfolio.bond_ladder - expected_bond_ladder_end).abs() <= 1e-6);
 
             // Pot-level accounting identity:
             // end = start + contributions(0) - gross_withdrawals + market_move
@@ -2349,16 +2556,20 @@ mod tests {
             let taxable_market_move = expected_taxable_end - after_withdraw_taxable;
             let pension_market_move = expected_pension_end - after_withdraw_pension;
             let cash_market_move = expected_cash_end - after_withdraw_cash;
+            let bond_ladder_market_move = expected_bond_ladder_end - after_withdraw_bond_ladder;
 
             let isa_identity_end = start_isa - isa_withdrawn_gross + isa_market_move;
             let taxable_identity_end = start_taxable - taxable_withdrawn_gross + taxable_market_move;
             let pension_identity_end = start_pension - pension_withdrawn_gross + pension_market_move;
             let cash_identity_end = start_cash - cash_used + cash_market_move;
+            let bond_ladder_identity_end =
+                start_bond_ladder - bond_ladder_withdrawn_gross + bond_ladder_market_move;
 
             prop_assert!((isa_identity_end - expected_isa_end).abs() <= 1e-6);
             prop_assert!((taxable_identity_end - expected_taxable_end).abs() <= 1e-6);
             prop_assert!((pension_identity_end - expected_pension_end).abs() <= 1e-6);
             prop_assert!((cash_identity_end - expected_cash_end).abs() <= 1e-6);
+            prop_assert!((bond_ladder_identity_end - expected_bond_ladder_end).abs() <= 1e-6);
 
             let row = &trace[0];
             prop_assert!((row.withdrawal_portfolio_real - outcome.portfolio_withdrawn_net).abs() <= 1e-4);
@@ -2368,6 +2579,7 @@ mod tests {
             prop_assert!((row.end_taxable_real - expected_taxable_end).abs() <= 1e-6);
             prop_assert!((row.end_pension_real - expected_pension_end).abs() <= 1e-6);
             prop_assert!((row.end_cash_real - expected_cash_end).abs() <= 1e-6);
+            prop_assert!((row.end_bond_ladder_real - expected_bond_ladder_end).abs() <= 1e-6);
         }
     }
 
@@ -2668,6 +2880,11 @@ mod tests {
                     b.median_end_pension,
                 ),
                 ("median_end_cash", a.median_end_cash, b.median_end_cash),
+                (
+                    "median_end_bond_ladder",
+                    a.median_end_bond_ladder,
+                    b.median_end_bond_ladder,
+                ),
                 ("median_end_total", a.median_end_total, b.median_end_total),
             ] {
                 assert!(
@@ -2860,6 +3077,37 @@ mod tests {
     }
 
     #[test]
+    fn oracle_bond_ladder_draws_evenly_before_other_pots() {
+        let mut inputs = deterministic_oracle_inputs();
+        inputs.current_age = 30;
+        inputs.max_retirement_age = 30;
+        inputs.horizon_age = 33;
+        inputs.pension_access_age = 57;
+
+        inputs.isa_start = 0.0;
+        inputs.taxable_start = 0.0;
+        inputs.taxable_cost_basis_start = 0.0;
+        inputs.pension_start = 0.0;
+        inputs.cash_start = 0.0;
+        inputs.bond_ladder_start = 90.0;
+        inputs.bond_ladder_yield = 0.0;
+        inputs.bond_ladder_years = 3;
+        inputs.target_annual_income = 30.0;
+
+        let mut rng = Rng::new(derive_seed(inputs.seed, 30, 0));
+        let scenario = simulate_scenario(&inputs, 30, 30, &mut rng, None);
+        assert!(scenario.success);
+        assert_approx(scenario.reported_terminal_bond_ladder, 0.0);
+        assert_approx(scenario.reported_terminal_total, 0.0);
+
+        let rows = run_yearly_cashflow_trace(&inputs, 30, 30, 30);
+        assert_eq!(rows.len(), 3);
+        assert_approx(rows[0].median_end_bond_ladder, 60.0);
+        assert_approx(rows[1].median_end_bond_ladder, 30.0);
+        assert_approx(rows[2].median_end_bond_ladder, 0.0);
+    }
+
+    #[test]
     fn pre_retirement_contributions_apply_isa_cap_and_overflow() {
         let inputs = sample_inputs();
         let mut portfolio = Portfolio {
@@ -2868,6 +3116,7 @@ mod tests {
             taxable_basis: 0.0,
             pension: 0.0,
             cash_buffer: 0.0,
+            bond_ladder: 0.0,
         };
 
         apply_pre_retirement_contributions(&inputs, &mut portfolio, 0);
@@ -2889,6 +3138,7 @@ mod tests {
             taxable_basis: 2_000.0,
             pension: 3_000.0,
             cash_buffer: 0.0,
+            bond_ladder: 0.0,
         };
 
         apply_pre_retirement_contributions(&inputs, &mut portfolio, 0);
@@ -2907,6 +3157,7 @@ mod tests {
             taxable_basis: 0.0,
             pension: 0.0,
             cash_buffer: 0.0,
+            bond_ladder: 0.0,
         };
 
         apply_pre_retirement_contributions(&inputs, &mut portfolio, 1);
@@ -3078,6 +3329,7 @@ mod tests {
             taxable_basis: 100.0,
             pension: 100.0,
             cash_buffer: 0.0,
+            bond_ladder: 0.0,
         };
         let mut cgt = CgtState {
             allowance_remaining: 3_000.0,
@@ -3116,6 +3368,7 @@ mod tests {
             taxable_basis: 0.0,
             pension: 0.0,
             cash_buffer: 0.0,
+            bond_ladder: 0.0,
         };
         let mut cgt = CgtState {
             allowance_remaining: 3_000.0,
@@ -3130,6 +3383,7 @@ mod tests {
         let outcome = run_withdrawal_year(
             &inputs,
             60,
+            0,
             100.0,
             0.10,
             100.0,
@@ -3211,6 +3465,7 @@ mod tests {
             taxable_basis: 0.0,
             pension: 0.0,
             cash_buffer: 0.0,
+            bond_ladder: 0.0,
         };
         let mut cgt = CgtState {
             allowance_remaining: 3_000.0,
@@ -3225,6 +3480,7 @@ mod tests {
         let outcome = run_withdrawal_year(
             &inputs,
             60,
+            0,
             100.0,
             0.10,
             100.0,

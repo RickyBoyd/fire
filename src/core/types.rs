@@ -6,6 +6,7 @@ pub enum WithdrawalOrder {
     IsaFirst,
     TaxableFirst,
     PensionFirst,
+    BondLadderFirst,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -32,6 +33,7 @@ pub struct Inputs {
     pub taxable_cost_basis_start: f64,
     pub pension_start: f64,
     pub cash_start: f64,
+    pub bond_ladder_start: f64,
     pub isa_annual_contribution: f64,
     pub isa_annual_contribution_limit: f64,
     pub taxable_annual_contribution: f64,
@@ -83,6 +85,8 @@ pub struct Inputs {
     pub bucket_target_years: f64,
     pub good_year_extra_buffer_withdrawal: f64,
     pub cash_growth_rate: f64,
+    pub bond_ladder_yield: f64,
+    pub bond_ladder_years: u32,
     pub post_access_withdrawal_order: WithdrawalOrder,
 }
 
@@ -101,6 +105,8 @@ pub struct AgeResult {
     pub p10_retirement_pension: f64,
     pub median_retirement_cash: f64,
     pub p10_retirement_cash: f64,
+    pub median_retirement_bond_ladder: f64,
+    pub p10_retirement_bond_ladder: f64,
     pub median_terminal_pot: f64,
     pub p10_terminal_pot: f64,
     pub median_terminal_isa: f64,
@@ -111,6 +117,8 @@ pub struct AgeResult {
     pub p10_terminal_pension: f64,
     pub median_terminal_cash: f64,
     pub p10_terminal_cash: f64,
+    pub median_terminal_bond_ladder: f64,
+    pub p10_terminal_bond_ladder: f64,
     pub p10_min_income_ratio: f64,
     pub median_avg_income_ratio: f64,
 }
@@ -140,5 +148,6 @@ pub struct CashflowYearResult {
     pub median_end_taxable: f64,
     pub median_end_pension: f64,
     pub median_end_cash: f64,
+    pub median_end_bond_ladder: f64,
     pub median_end_total: f64,
 }

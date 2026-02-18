@@ -26,6 +26,7 @@ enum CliWithdrawalOrder {
     IsaFirst,
     TaxableFirst,
     PensionFirst,
+    BondLadderFirst,
 }
 
 impl From<CliWithdrawalOrder> for WithdrawalOrder {
@@ -35,6 +36,7 @@ impl From<CliWithdrawalOrder> for WithdrawalOrder {
             CliWithdrawalOrder::IsaFirst => WithdrawalOrder::IsaFirst,
             CliWithdrawalOrder::TaxableFirst => WithdrawalOrder::TaxableFirst,
             CliWithdrawalOrder::PensionFirst => WithdrawalOrder::PensionFirst,
+            CliWithdrawalOrder::BondLadderFirst => WithdrawalOrder::BondLadderFirst,
         }
     }
 }
@@ -92,6 +94,8 @@ enum ApiWithdrawalOrder {
     TaxableFirst,
     #[serde(alias = "pensionFirst", alias = "pension_first")]
     PensionFirst,
+    #[serde(alias = "bondLadderFirst", alias = "bond_ladder_first")]
+    BondLadderFirst,
 }
 
 impl From<ApiWithdrawalOrder> for CliWithdrawalOrder {
@@ -101,6 +105,7 @@ impl From<ApiWithdrawalOrder> for CliWithdrawalOrder {
             ApiWithdrawalOrder::IsaFirst => CliWithdrawalOrder::IsaFirst,
             ApiWithdrawalOrder::TaxableFirst => CliWithdrawalOrder::TaxableFirst,
             ApiWithdrawalOrder::PensionFirst => CliWithdrawalOrder::PensionFirst,
+            ApiWithdrawalOrder::BondLadderFirst => CliWithdrawalOrder::BondLadderFirst,
         }
     }
 }
@@ -236,6 +241,7 @@ struct SimulatePayload {
     taxable_basis_start: Option<f64>,
     pension_start: Option<f64>,
     cash_start: Option<f64>,
+    bond_ladder_start: Option<f64>,
 
     isa_contribution: Option<f64>,
     isa_limit: Option<f64>,
@@ -288,6 +294,8 @@ struct SimulatePayload {
     bucket_years_target: Option<f64>,
     extra_to_cash: Option<f64>,
     cash_growth: Option<f64>,
+    bond_ladder_yield: Option<f64>,
+    bond_ladder_years: Option<u32>,
     withdrawal_order: Option<ApiWithdrawalOrder>,
 
     analysis_mode: Option<ApiAnalysisMode>,
@@ -334,6 +342,12 @@ struct Cli {
     pension_start: f64,
     #[arg(long, default_value_t = 0.0)]
     cash_start: f64,
+    #[arg(
+        long,
+        default_value_t = 0.0,
+        help = "Starting value of bond ladder reserved for retirement withdrawals"
+    )]
+    bond_ladder_start: f64,
     #[arg(long)]
     isa_annual_contribution: f64,
     #[arg(
@@ -575,6 +589,18 @@ struct Cli {
     good_year_extra_buffer_withdrawal: f64,
     #[arg(long, default_value_t = 1.0, help = "Cash buffer growth in percent")]
     cash_growth_rate: f64,
+    #[arg(
+        long,
+        default_value_t = 3.0,
+        help = "Bond ladder annual yield in percent"
+    )]
+    bond_ladder_yield: f64,
+    #[arg(
+        long,
+        default_value_t = 10,
+        help = "Bond ladder drawdown horizon in retirement years"
+    )]
+    bond_ladder_years: u32,
     #[arg(long, value_enum, default_value_t = CliWithdrawalOrder::ProRata)]
     post_access_withdrawal_order: CliWithdrawalOrder,
 }
@@ -709,6 +735,14 @@ fn build_inputs(cli: Cli) -> Result<Inputs, String> {
         return Err("--cash-start must be >= 0".to_string());
     }
 
+    if cli.bond_ladder_start < 0.0 {
+        return Err("--bond-ladder-start must be >= 0".to_string());
+    }
+
+    if !cli.bond_ladder_yield.is_finite() || cli.bond_ladder_yield <= -100.0 {
+        return Err("--bond-ladder-yield must be > -100".to_string());
+    }
+
     if !(0.0..=100.0).contains(&cli.capital_gains_tax_rate) {
         return Err("--capital-gains-tax-rate must be between 0 and 100".to_string());
     }
@@ -822,6 +856,7 @@ fn build_inputs(cli: Cli) -> Result<Inputs, String> {
         },
         pension_start: cli.pension_start,
         cash_start: cli.cash_start,
+        bond_ladder_start: cli.bond_ladder_start,
         isa_annual_contribution: cli.isa_annual_contribution,
         isa_annual_contribution_limit: cli.isa_annual_contribution_limit,
         taxable_annual_contribution: cli.taxable_annual_contribution,
@@ -873,6 +908,8 @@ fn build_inputs(cli: Cli) -> Result<Inputs, String> {
         bucket_target_years: cli.bucket_target_years,
         good_year_extra_buffer_withdrawal: cli.good_year_extra_buffer_withdrawal / 100.0,
         cash_growth_rate: cli.cash_growth_rate / 100.0,
+        bond_ladder_yield: cli.bond_ladder_yield / 100.0,
+        bond_ladder_years: cli.bond_ladder_years,
         post_access_withdrawal_order: cli.post_access_withdrawal_order.into(),
     })
 }
@@ -1219,6 +1256,9 @@ fn api_request_from_payload(payload: SimulatePayload) -> Result<ApiRequest, Stri
     if let Some(v) = payload.cash_start {
         cli.cash_start = v;
     }
+    if let Some(v) = payload.bond_ladder_start {
+        cli.bond_ladder_start = v;
+    }
 
     if let Some(v) = payload.isa_contribution {
         cli.isa_annual_contribution = v;
@@ -1365,6 +1405,12 @@ fn api_request_from_payload(payload: SimulatePayload) -> Result<ApiRequest, Stri
     if let Some(v) = payload.cash_growth {
         cli.cash_growth_rate = v;
     }
+    if let Some(v) = payload.bond_ladder_yield {
+        cli.bond_ladder_yield = v;
+    }
+    if let Some(v) = payload.bond_ladder_years {
+        cli.bond_ladder_years = v;
+    }
     if let Some(v) = payload.withdrawal_order {
         cli.post_access_withdrawal_order = v.into();
     }
@@ -1398,6 +1444,7 @@ fn default_cli_for_api() -> Cli {
         taxable_cost_basis_start: 12_000.0,
         pension_start: 200_000.0,
         cash_start: 0.0,
+        bond_ladder_start: 0.0,
         isa_annual_contribution: 30_000.0,
         isa_annual_contribution_limit: 20_000.0,
         taxable_annual_contribution: 5_000.0,
@@ -1449,6 +1496,8 @@ fn default_cli_for_api() -> Cli {
         bucket_target_years: 2.0,
         good_year_extra_buffer_withdrawal: 10.0,
         cash_growth_rate: 1.0,
+        bond_ladder_yield: 3.0,
+        bond_ladder_years: 10,
         post_access_withdrawal_order: CliWithdrawalOrder::ProRata,
     }
 }
@@ -1579,6 +1628,7 @@ mod tests {
           "taxableBasisStart": 15000,
           "pensionStart": 250000,
           "cashStart": 5000,
+          "bondLadderStart": 25000,
           "targetIncome": 45000,
           "mortgageAnnualPayment": 12000,
           "mortgageEndAge": 40,
@@ -1589,7 +1639,9 @@ mod tests {
           "statePensionStartAge": 67,
           "statePensionIncome": 12000,
           "withdrawalPolicy": "vpw",
-          "vpwRealReturn": 4.2
+          "vpwRealReturn": 4.2,
+          "bondLadderYield": 3.2,
+          "bondLadderYears": 8
         }"#;
         let request = api_request_from_json(json).expect("json should parse");
         let inputs = request.inputs;
@@ -1601,6 +1653,7 @@ mod tests {
         assert_approx(inputs.taxable_cost_basis_start, 15_000.0);
         assert_approx(inputs.pension_start, 250_000.0);
         assert_approx(inputs.cash_start, 5_000.0);
+        assert_approx(inputs.bond_ladder_start, 25_000.0);
         assert_approx(inputs.target_annual_income, 45_000.0);
         assert_approx(inputs.mortgage_annual_payment, 12_000.0);
         assert_eq!(inputs.mortgage_end_age, Some(40));
@@ -1610,6 +1663,8 @@ mod tests {
         assert_eq!(inputs.simulations, 1234);
         assert_eq!(inputs.withdrawal_strategy, WithdrawalStrategy::Vpw);
         assert_approx(inputs.vpw_expected_real_return, 0.042);
+        assert_approx(inputs.bond_ladder_yield, 0.032);
+        assert_eq!(inputs.bond_ladder_years, 8);
         assert_eq!(
             inputs.post_access_withdrawal_order,
             WithdrawalOrder::TaxableFirst
@@ -1639,6 +1694,18 @@ mod tests {
         assert_eq!(request.options.mode, AnalysisMode::CoastFire);
         assert_eq!(request.options.coast_retirement_age, Some(60));
         assert_eq!(request.inputs.current_age, 31);
+    }
+
+    #[test]
+    fn api_request_from_json_parses_bond_ladder_withdrawal_order() {
+        let json = r#"{
+          "withdrawalOrder": "bond-ladder-first"
+        }"#;
+        let request = api_request_from_json(json).expect("json should parse");
+        assert_eq!(
+            request.inputs.post_access_withdrawal_order,
+            WithdrawalOrder::BondLadderFirst
+        );
     }
 
     #[test]

@@ -56,6 +56,7 @@
                   <label class="advanced-only">Taxable Cost Basis (£) <input name="taxableBasisStart" type="number" value="12000" min="0" step="100" title="Original purchase cost of taxable holdings, used for CGT calculations." /></label>
                   <label>Pension (£) <input name="pensionStart" type="number" value="200000" min="0" step="100" title="Current value of your pension pot." /></label>
                   <label>Cash Buffer (£) <input name="cashStart" type="number" value="0" min="0" step="100" title="Cash available at retirement start before selling investments." /></label>
+                  <label class="advanced-only">Bond Ladder (£) <input name="bondLadderStart" type="number" value="0" min="0" step="100" title="Current value of low-volatility bonds reserved for retirement drawdown." /></label>
                 </fieldset>
               </details>
 
@@ -110,6 +111,7 @@
                   <label class="advanced-only">ISA/Pension Correlation <input name="correlation" type="number" value="0.8" min="-1" max="1" step="0.01" title="How similarly ISA and pension returns move each year." /></label>
                   <label>Inflation Mean (%) <input name="inflationMean" type="number" value="2.5" step="0.1" title="Expected long-run annual inflation." /></label>
                   <label class="advanced-only">Inflation Volatility (%) <input name="inflationVol" type="number" value="1" min="0" step="0.1" title="Year-to-year variation in inflation." /></label>
+                  <label class="advanced-only">Bond Ladder Yield (%) <input name="bondLadderYield" type="number" value="3" step="0.1" title="Expected annual nominal return for the bond ladder pot." /></label>
                 </fieldset>
               </details>
 
@@ -141,12 +143,14 @@
                   <label>Max Income Ceiling (%) <input name="maxCeiling" type="number" value="200" min="1" step="0.1" title="Maximum spending level as a percent of target income." /></label>
                   <label class="advanced-only">Good-Year Extra to Cash Buffer (%) <input name="extraToCash" type="number" value="10" min="0" step="0.1" title="Extra withdrawal in good years moved into cash buffer." /></label>
                   <label class="advanced-only">Cash Growth (%) <input name="cashGrowth" type="number" value="1" step="0.1" title="Annual growth rate applied to cash buffer." /></label>
+                  <label class="advanced-only">Bond Ladder Years <input name="bondLadderYears" type="number" value="10" min="0" step="1" title="Retirement years over which ladder withdrawals are smoothed before falling back to other pots." /></label>
                   <label class="advanced-only">Post-Access Withdrawal Order
                     <select name="withdrawalOrder" title="Order used to draw retirement income once pension is accessible.">
                       <option value="pro-rata">Pro Rata (ISA/Pension/Taxable)</option>
                       <option value="isa-first">ISA First</option>
                       <option value="taxable-first">Taxable First</option>
                       <option value="pension-first">Pension First</option>
+                      <option value="bond-ladder-first">Bond Ladder First</option>
                     </select>
                   </label>
                 </fieldset>
@@ -165,7 +169,12 @@
                   <label>Simulations per Age <input name="simulations" type="number" value="3000" min="100" step="100" title="Number of Monte Carlo runs per retirement age candidate." /></label>
                   <label>Success Threshold (%) <input name="successThreshold" type="number" value="90" min="0" max="100" step="0.1" title="Required success probability to count an age as feasible." /></label>
                   <label class="advanced-only">Seed <input name="seed" type="number" value="42" min="1" step="1" title="Random seed for reproducible Monte Carlo results." /></label>
+                </fieldset>
+              </details>
 
+              <details class="config-section" data-section-level="advanced" open>
+                <summary>Goal Solver</summary>
+                <fieldset class="section-body">
                   <label>Goal Type
                     <select name="goalType" title="Choose what the solver should optimize for at the selected retirement age.">
                       <option value="required-contribution">Required Contribution</option>
@@ -353,20 +362,24 @@
               <th>Median Retirement Taxable</th>
               <th>Median Retirement Pension</th>
               <th>Median Retirement Cash</th>
+              <th>Median Retirement Bond Ladder</th>
               <th>P10 Retirement ISA</th>
               <th>P10 Retirement Taxable</th>
               <th>P10 Retirement Pension</th>
               <th>P10 Retirement Cash</th>
+              <th>P10 Retirement Bond Ladder</th>
               <th>Median Total (Today £)</th>
               <th>P10 Total (Today £)</th>
               <th>Median ISA</th>
               <th>Median Taxable</th>
               <th>Median Pension</th>
               <th>Median Cash</th>
+              <th>Median Bond Ladder</th>
               <th>P10 ISA</th>
               <th>P10 Taxable</th>
               <th>P10 Pension</th>
               <th>P10 Cash</th>
+              <th>P10 Bond Ladder</th>
             </tr>
           </thead>
           <tbody></tbody>
@@ -396,6 +409,7 @@
               <th>Median End Taxable</th>
               <th>Median End Pension</th>
               <th>Median End Cash</th>
+              <th>Median End Bond Ladder</th>
               <th>Median End Total</th>
             </tr>
           </thead>

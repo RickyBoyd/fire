@@ -352,6 +352,7 @@ mod tests {
             taxable_cost_basis_start: 0.0,
             pension_start: 0.0,
             cash_start: 0.0,
+            bond_ladder_start: 0.0,
             isa_annual_contribution: 1.0,
             isa_annual_contribution_limit: 20_000.0,
             taxable_annual_contribution: 0.0,
@@ -403,6 +404,8 @@ mod tests {
             bucket_target_years: 2.0,
             good_year_extra_buffer_withdrawal: 0.0,
             cash_growth_rate: 0.0,
+            bond_ladder_yield: 0.0,
+            bond_ladder_years: 0,
             post_access_withdrawal_order: WithdrawalOrder::IsaFirst,
         }
     }
